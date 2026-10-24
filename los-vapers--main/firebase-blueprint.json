@@ -1,0 +1,106 @@
+{
+  "entities": {
+    "product": {
+      "title": "Product",
+      "description": "Un producto en el inventario",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "nombre": { "type": "string" },
+        "brand": { "type": "string" },
+        "marca": { "type": "string" },
+        "category": { "type": "string" },
+        "stock": { "type": "integer" },
+        "cantidad": { "type": "integer" },
+        "minStock": { "type": "integer" },
+        "costPrice": { "type": "number" },
+        "sellingPrice": { "type": "number" },
+        "precio": { "type": "number" },
+        "sku": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" },
+        "isDeleted": { "type": "boolean" },
+        "deletedAt": { "type": "number" },
+        "deletedBy": { "type": "string" },
+        "updatedBy": { "type": "string" }
+      },
+      "required": ["name", "stock", "sellingPrice"]
+    },
+    "activityLog": {
+      "title": "ActivityLog",
+      "description": "Registro de actividad de una transacción o ajuste de stock con operador",
+      "type": "object",
+      "properties": {
+        "productId": { "type": "string" },
+        "productName": { "type": "string" },
+        "type": { "type": "string", "enum": ["sale", "restock", "adjustment", "void_sale", "trash", "restore"] },
+        "quantity": { "type": "integer" },
+        "prevStock": { "type": "integer" },
+        "newStock": { "type": "integer" },
+        "costPrice": { "type": "number" },
+        "sellingPrice": { "type": "number" },
+        "reason": { "type": "string" },
+        "operatorEmail": { "type": "string" },
+        "operatorName": { "type": "string" },
+        "timestamp": { "type": "number" }
+      },
+      "required": ["productId", "productName", "type", "quantity", "prevStock", "newStock", "timestamp"]
+    },
+    "categoryThreshold": {
+      "title": "CategoryThreshold",
+      "description": "Umbral de stock personalizado por categoría",
+      "type": "object",
+      "properties": {
+        "minStock": { "type": "integer" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["minStock"]
+    },
+    "venta": {
+      "title": "Venta",
+      "description": "Registro de una venta realizada o anulada",
+      "type": "object",
+      "properties": {
+        "productId": { "type": "string" },
+        "productName": { "type": "string" },
+        "brand": { "type": "string" },
+        "sellingPrice": { "type": "number" },
+        "costPrice": { "type": "number" },
+        "quantity": { "type": "integer" },
+        "profit": { "type": "number" },
+        "paymentMethod": { "type": "string", "enum": ["Efectivo", "Transferencia", "Crédito"] },
+        "timestamp": { "type": "number" },
+        "deviceModel": { "type": "string" },
+        "debtorName": { "type": "string" },
+        "isPaid": { "type": "boolean" },
+        "debtAmount": { "type": "number" },
+        "status": { "type": "string", "enum": ["completada", "anulada"] },
+        "operatorEmail": { "type": "string" },
+        "operatorName": { "type": "string" },
+        "voidReason": { "type": "string" },
+        "voidTimestamp": { "type": "number" },
+        "voidBy": { "type": "string" }
+      },
+      "required": ["productId", "productName", "sellingPrice", "quantity", "paymentMethod", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/productos/{productId}": {
+      "schema": "product",
+      "description": "Colección de productos del catálogo de inventario"
+    },
+    "/activityLogs/{logId}": {
+      "schema": "activityLog",
+      "description": "Colección de registros de transacciones y movimientos de stock"
+    },
+    "/categoryThresholds/{categoryName}": {
+      "schema": "categoryThreshold",
+      "description": "Colección de umbrales por categoría"
+    },
+    "/ventas/{ventaId}": {
+      "schema": "venta",
+      "description": "Colección de registros de ventas"
+    }
+  }
+}

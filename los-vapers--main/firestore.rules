@@ -1,0 +1,59 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isConfiguredAdmin() {
+      let configPath = /databases/$(database)/documents/admin_config/emails;
+      return request.auth.token.email != null &&
+        exists(configPath) &&
+        get(configPath).data.list is list &&
+        request.auth.token.email in get(configPath).data.list;
+    }
+
+    function isAuthorizedAdmin() {
+      return isSignedIn() && (
+        request.auth.uid == '7veWlG9BEWgorpmf7sMAPJvMY3k2' ||
+        (request.auth.token.email != null && (
+          request.auth.token.email == 'djgamer802@gmail.com' ||
+          request.auth.token.email == 'supposimon@gmail.com'
+        )) ||
+        isConfiguredAdmin()
+      );
+    }
+
+    // Colección de Productos
+    match /productos/{productId} {
+      allow read, write: if isAuthorizedAdmin();
+    }
+
+    // Colección de Ventas y Deudas
+    match /ventas/{ventaId} {
+      allow read, write: if isAuthorizedAdmin();
+    }
+
+    // Colección de Bitácora de Auditoría
+    match /activityLogs/{logId} {
+      allow read, write: if isAuthorizedAdmin();
+    }
+
+    // Configuración de umbrales
+    match /categoryThresholds/{catId} {
+      allow read, write: if isAuthorizedAdmin();
+    }
+
+    // Public catalog mirror contains no inventory cost or operator data.
+    match /catalogo_publico/{productoId} {
+      allow read: if true;
+      allow write: if isAuthorizedAdmin();
+    }
+
+    match /admin_config/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isAuthorizedAdmin();
+    }
+  }
+}

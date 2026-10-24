@@ -1,0 +1,6 @@
+{
+  "summary":  "Plan de implementación integral para la seguridad con Google Auth (djgamer802@gmail.com y supposimon@gmail.com), catálogo público de clientes con pedidos por WhatsApp, transacciones atómicas para ventas y stock, anulación de ventas con devolución de inventario, registro de entradas con motivo, papelera de reciclaje y reglas endurecidas de Firestore.",
+  "updatedAt":  "2026-10-24T04:11:23.967205439Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

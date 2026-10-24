@@ -1,0 +1,6 @@
+{
+  "name": "Gestor de Inventario",
+  "description": "Una aplicación web básica para gestionar el inventario de productos, integrada con Firebase Firestore.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
