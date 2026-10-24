@@ -1,0 +1,91 @@
+{
+  "entities": {
+    "product": {
+      "title": "Product",
+      "description": "Un producto en el inventario",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "brand": { "type": "string" },
+        "category": { "type": "string" },
+        "stock": { "type": "integer" },
+        "minStock": { "type": "integer" },
+        "useCategoryThreshold": { "type": "boolean" },
+        "costPrice": { "type": "number" },
+        "sellingPrice": { "type": "number" },
+        "sku": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["name", "brand", "category", "stock", "minStock", "costPrice", "sellingPrice", "sku"]
+    },
+    "activityLog": {
+      "title": "ActivityLog",
+      "description": "Registro de actividad de una transacción o ajuste de stock",
+      "type": "object",
+      "properties": {
+        "productId": { "type": "string" },
+        "productName": { "type": "string" },
+        "type": { "type": "string", "enum": ["sale", "restock", "adjustment"] },
+        "quantity": { "type": "integer" },
+        "prevStock": { "type": "integer" },
+        "newStock": { "type": "integer" },
+        "costPrice": { "type": "number" },
+        "sellingPrice": { "type": "number" },
+        "timestamp": { "type": "number" },
+        "customMessage": { "type": "string" }
+      },
+      "required": ["productId", "productName", "type", "quantity", "prevStock", "newStock", "timestamp"]
+    },
+    "categoryThreshold": {
+      "title": "CategoryThreshold",
+      "description": "Umbral de bajo stock personalizado para toda una categoría",
+      "type": "object",
+      "properties": {
+        "minStock": { "type": "integer" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["minStock"]
+    },
+    "venta": {
+      "title": "Venta",
+      "description": "Registro de una venta realizada",
+      "type": "object",
+      "properties": {
+        "productId": { "type": "string" },
+        "productName": { "type": "string" },
+        "brand": { "type": "string" },
+        "sellingPrice": { "type": "number" },
+        "costPrice": { "type": "number" },
+        "quantity": { "type": "integer" },
+        "profit": { "type": "number" },
+        "paymentMethod": { "type": "string", "enum": ["Efectivo", "Transferencia", "Crédito"] },
+        "timestamp": { "type": "number" },
+        "deviceModel": { "type": "string" },
+        "debtorName": { "type": "string" },
+        "isPaid": { "type": "boolean" },
+        "debtAmount": { "type": "number" }
+      },
+      "required": ["productId", "productName", "brand", "sellingPrice", "costPrice", "quantity", "profit", "paymentMethod", "timestamp", "deviceModel"]
+    }
+  },
+  "firestore": {
+    "/products/{productId}": {
+      "schema": "product",
+      "description": "Colección de productos del catálogo de inventario"
+    },
+    "/activityLogs/{logId}": {
+      "schema": "activityLog",
+      "description": "Colección de registros de transacciones y movimientos de stock"
+    },
+    "/categoryThresholds/{categoryName}": {
+      "schema": "categoryThreshold",
+      "description": "Colección de umbrales globales por categoría"
+    },
+    "/ventas/{ventaId}": {
+      "schema": "venta",
+      "description": "Colección de registros de ventas para reportes y estadísticas"
+    }
+  }
+}
