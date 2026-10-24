@@ -139,16 +139,10 @@ function MainApp() {
 
     setLoading(true);
     
-    const unsubscribeProducts = subscribeToProducts(
-      (loadedProducts) => {
-        setProducts(loadedProducts);
-        setLoading(false);
-      },
-      (error) => showToast(
-        'error',
-        `No se pudo actualizar el catálogo público: ${error.message}`
-      )
-    );
+    const unsubscribeProducts = subscribeToProducts((loadedProducts) => {
+      setProducts(loadedProducts);
+      setLoading(false);
+    });
 
     const unsubscribeLogs = subscribeToActivityLogs((loadedLogs) => {
       setLogs(loadedLogs);

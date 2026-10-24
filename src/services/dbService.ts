@@ -1,12 +1,10 @@
 import {
   collection,
-  type DocumentData,
   doc,
   addDoc,
   updateDoc,
   setDoc,
   deleteDoc,
-  getDoc,
   onSnapshot,
   query,
   orderBy,
@@ -24,7 +22,6 @@ const PRODUCTS_COLLECTION = 'productos';
 const VENTAS_COLLECTION = 'ventas';
 const LOGS_COLLECTION = 'activityLogs';
 const CATEGORY_SETTINGS_COLLECTION = 'categoryThresholds';
-const PUBLIC_CATALOG_COLLECTION = 'catalogo_publico';
 
 enum OperationType {
   CREATE = 'create',
@@ -74,55 +71,14 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   throw new Error(JSON.stringify(errInfo));
 }
 
-async function syncPublicCatalogProduct(productId: string, data: DocumentData) {
-  await setDoc(
-    doc(db, PUBLIC_CATALOG_COLLECTION, productId),
-    {
-      nombre: data.nombre ?? data.name ?? '',
-      marca: data.marca ?? data.brand ?? '',
-      categoria: data.categoria ?? data.category ?? 'Vapes',
-      precio: Number(data.precio ?? data.sellingPrice ?? 0),
-      disponible: Number(data.cantidad ?? data.stock ?? 0) > 0,
-      inventorySource: true,
-      inventoryDeleted: data.isDeleted === true,
-      updatedAt: typeof data.updatedAt === 'number' ? data.updatedAt : Date.now(),
-    },
-    { merge: true }
-  );
-}
-
-async function removePublicCatalogProduct(productId: string) {
-  const publicProductRef = doc(db, PUBLIC_CATALOG_COLLECTION, productId);
-  const publicProduct = await getDoc(publicProductRef);
-  if (publicProduct.exists() && publicProduct.data().inventorySource === true) {
-    await deleteDoc(publicProductRef);
-  }
-}
-
 // Subscribe to real-time products
 // We do not use orderBy('createdAt') in the query because Firestore strictly excludes
 // any documents that lack that field. Instead, we query the collection and sort in memory.
-export function subscribeToProducts(
-  callback: (products: Product[]) => void,
-  onCatalogSyncError?: (error: Error) => void
-) {
+export function subscribeToProducts(callback: (products: Product[]) => void) {
   const q = collection(db, PRODUCTS_COLLECTION);
   
   return onSnapshot(q, (snapshot) => {
     try {
-      const catalogSync = snapshot.docChanges().map((change) =>
-        change.type === 'removed'
-          ? removePublicCatalogProduct(change.doc.id)
-          : syncPublicCatalogProduct(change.doc.id, change.doc.data())
-      );
-      void Promise.all(catalogSync).catch((error: unknown) => {
-        const syncError = error instanceof Error
-          ? error
-          : new Error(String(error));
-        console.error('Error sincronizando el catálogo público:', syncError);
-        onCatalogSyncError?.(syncError);
-      });
-
       const products: Product[] = [];
       snapshot.forEach((doc) => {
         const data = doc.data();
