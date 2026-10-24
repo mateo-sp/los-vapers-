@@ -6,41 +6,50 @@
       "type": "object",
       "properties": {
         "name": { "type": "string" },
+        "nombre": { "type": "string" },
         "brand": { "type": "string" },
+        "marca": { "type": "string" },
         "category": { "type": "string" },
         "stock": { "type": "integer" },
+        "cantidad": { "type": "integer" },
         "minStock": { "type": "integer" },
-        "useCategoryThreshold": { "type": "boolean" },
         "costPrice": { "type": "number" },
         "sellingPrice": { "type": "number" },
+        "precio": { "type": "number" },
         "sku": { "type": "string" },
         "notes": { "type": "string" },
         "createdAt": { "type": "number" },
-        "updatedAt": { "type": "number" }
+        "updatedAt": { "type": "number" },
+        "isDeleted": { "type": "boolean" },
+        "deletedAt": { "type": "number" },
+        "deletedBy": { "type": "string" },
+        "updatedBy": { "type": "string" }
       },
-      "required": ["name", "brand", "category", "stock", "minStock", "costPrice", "sellingPrice", "sku"]
+      "required": ["name", "stock", "sellingPrice"]
     },
     "activityLog": {
       "title": "ActivityLog",
-      "description": "Registro de actividad de una transacción o ajuste de stock",
+      "description": "Registro de actividad de una transacción o ajuste de stock con operador",
       "type": "object",
       "properties": {
         "productId": { "type": "string" },
         "productName": { "type": "string" },
-        "type": { "type": "string", "enum": ["sale", "restock", "adjustment"] },
+        "type": { "type": "string", "enum": ["sale", "restock", "adjustment", "void_sale", "trash", "restore"] },
         "quantity": { "type": "integer" },
         "prevStock": { "type": "integer" },
         "newStock": { "type": "integer" },
         "costPrice": { "type": "number" },
         "sellingPrice": { "type": "number" },
-        "timestamp": { "type": "number" },
-        "customMessage": { "type": "string" }
+        "reason": { "type": "string" },
+        "operatorEmail": { "type": "string" },
+        "operatorName": { "type": "string" },
+        "timestamp": { "type": "number" }
       },
       "required": ["productId", "productName", "type", "quantity", "prevStock", "newStock", "timestamp"]
     },
     "categoryThreshold": {
       "title": "CategoryThreshold",
-      "description": "Umbral de bajo stock personalizado para toda una categoría",
+      "description": "Umbral de stock personalizado por categoría",
       "type": "object",
       "properties": {
         "minStock": { "type": "integer" },
@@ -50,7 +59,7 @@
     },
     "venta": {
       "title": "Venta",
-      "description": "Registro de una venta realizada",
+      "description": "Registro de una venta realizada o anulada",
       "type": "object",
       "properties": {
         "productId": { "type": "string" },
@@ -65,13 +74,19 @@
         "deviceModel": { "type": "string" },
         "debtorName": { "type": "string" },
         "isPaid": { "type": "boolean" },
-        "debtAmount": { "type": "number" }
+        "debtAmount": { "type": "number" },
+        "status": { "type": "string", "enum": ["completada", "anulada"] },
+        "operatorEmail": { "type": "string" },
+        "operatorName": { "type": "string" },
+        "voidReason": { "type": "string" },
+        "voidTimestamp": { "type": "number" },
+        "voidBy": { "type": "string" }
       },
-      "required": ["productId", "productName", "brand", "sellingPrice", "costPrice", "quantity", "profit", "paymentMethod", "timestamp", "deviceModel"]
+      "required": ["productId", "productName", "sellingPrice", "quantity", "paymentMethod", "timestamp"]
     }
   },
   "firestore": {
-    "/products/{productId}": {
+    "/productos/{productId}": {
       "schema": "product",
       "description": "Colección de productos del catálogo de inventario"
     },
@@ -81,11 +96,11 @@
     },
     "/categoryThresholds/{categoryName}": {
       "schema": "categoryThreshold",
-      "description": "Colección de umbrales globales por categoría"
+      "description": "Colección de umbrales por categoría"
     },
     "/ventas/{ventaId}": {
       "schema": "venta",
-      "description": "Colección de registros de ventas para reportes y estadísticas"
+      "description": "Colección de registros de ventas"
     }
   }
 }

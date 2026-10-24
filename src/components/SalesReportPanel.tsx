@@ -3,15 +3,10 @@ import { motion, AnimatePresence } from 'motion/react';
 import { 
   TrendingUp, 
   DollarSign, 
-  Percent, 
-  ChevronRight, 
-  Clock, 
-  Trash2, 
   FileSpreadsheet, 
-  Layers, 
-  ArrowUpRight, 
-  Sparkles,
-  Smartphone,
+  RotateCcw, 
+  CheckCircle2,
+  XCircle,
   Calendar,
   AlertCircle
 } from 'lucide-react';
@@ -21,9 +16,10 @@ import ConfirmModal from './ConfirmModal';
 interface SalesReportPanelProps {
   ventas: Venta[];
   products: Product[];
-  onDeleteVenta: (id: string) => Promise<void>;
+  onVoidVenta: (venta: Venta) => void;
   onClearAllVentas: () => Promise<void>;
   onUpdateVenta?: (id: string, updates: Partial<Venta>) => Promise<void>;
+  currentOperatorName?: string;
 }
 
 type TimeFilter = '4h' | '24h' | '7d' | 'all';
@@ -31,37 +27,35 @@ type TimeFilter = '4h' | '24h' | '7d' | 'all';
 export default function SalesReportPanel({
   ventas,
   products,
-  onDeleteVenta,
+  onVoidVenta,
   onClearAllVentas,
   onUpdateVenta,
+  currentOperatorName = 'Administrador'
 }: SalesReportPanelProps) {
   const [timeFilter, setTimeFilter] = useState<TimeFilter>('all');
-  const [isConfirmClearAllOpen, setIsConfirmClearAllOpen] = useState(false);
-  const [saleToDelete, setSaleToDelete] = useState<{ id: string; name: string } | null>(null);
-  
-  // Debt/Debtor tracking states
   const [subTab, setSubTab] = useState<'ventas' | 'deudores'>('ventas');
   const [debtToPay, setDebtToPay] = useState<Venta | null>(null);
+  const [statusFilter, setStatusFilter] = useState<'all' | 'completada' | 'anulada'>('all');
 
-  // Filter sales based on temporal selection
+  // Filter sales based on temporal selection and status
   const filteredSales = useMemo(() => {
     const now = Date.now();
     return ventas.filter((sale) => {
       const diffMs = now - sale.timestamp;
-      if (timeFilter === '4h') {
-        return diffMs <= 4 * 60 * 60 * 1000;
-      }
-      if (timeFilter === '24h') {
-        return diffMs <= 24 * 60 * 60 * 1000;
-      }
-      if (timeFilter === '7d') {
-        return diffMs <= 7 * 24 * 60 * 60 * 1000;
-      }
-      return true; // 'all'
-    });
-  }, [ventas, timeFilter]);
+      let matchesTime = true;
+      if (timeFilter === '4h') matchesTime = diffMs <= 4 * 60 * 60 * 1000;
+      else if (timeFilter === '24h') matchesTime = diffMs <= 24 * 60 * 60 * 1000;
+      else if (timeFilter === '7d') matchesTime = diffMs <= 7 * 24 * 60 * 60 * 1000;
 
-  // Compute stats: Totales, Efectivo, Transferencia, Créditos y Ganancia Total
+      if (!matchesTime) return false;
+
+      if (statusFilter === 'completada') return sale.status !== 'anulada';
+      if (statusFilter === 'anulada') return sale.status === 'anulada';
+      return true;
+    });
+  }, [ventas, timeFilter, statusFilter]);
+
+  // Compute stats ONLY from active completed sales (voided sales do NOT inflate revenue/profit)
   const stats = useMemo(() => {
     let totalVendidos = 0;
     let totalEfectivo = 0;
@@ -69,8 +63,22 @@ export default function SalesReportPanel({
     let totalCreditoPendiente = 0;
     let totalCreditoCobrado = 0;
     let totalProfit = 0;
+    let totalAnuladasCount = 0;
 
-    filteredSales.forEach((sale) => {
+    ventas.forEach((sale) => {
+      const now = Date.now();
+      const diffMs = now - sale.timestamp;
+      let inTime = true;
+      if (timeFilter === '4h') inTime = diffMs <= 4 * 60 * 60 * 1000;
+      else if (timeFilter === '24h') inTime = diffMs <= 24 * 60 * 60 * 1000;
+      else if (timeFilter === '7d') inTime = diffMs <= 7 * 24 * 60 * 60 * 1000;
+      if (!inTime) return;
+
+      if (sale.status === 'anulada') {
+        totalAnuladasCount++;
+        return; // Exclude voided from active financial totals
+      }
+
       const saleAmount = sale.sellingPrice * sale.quantity;
       totalVendidos += saleAmount;
       if (sale.paymentMethod === 'Efectivo') {
@@ -95,18 +103,22 @@ export default function SalesReportPanel({
       totalCreditoPendiente,
       totalCreditoCobrado,
       totalProfit,
+      totalAnuladasCount
     };
-  }, [filteredSales]);
+  }, [ventas, timeFilter]);
 
-  // Debtor list: pending credit sales (We show all of them regardless of timeFilter so no debt gets lost from view!)
+  // Debtor list: pending credit sales (only completed, non-voided sales)
   const deudoresSales = useMemo(() => {
-    return ventas.filter((sale) => sale.paymentMethod === 'Crédito' && !sale.isPaid);
+    return ventas.filter(
+      (sale) => sale.paymentMethod === 'Crédito' && !sale.isPaid && sale.status !== 'anulada'
+    );
   }, [ventas]);
 
-  // Top 5 best selling products
+  // Top products (only from completed sales)
   const topProducts = useMemo(() => {
     const counts: Record<string, { name: string; brand: string; quantity: number; revenue: number }> = {};
     filteredSales.forEach((sale) => {
+      if (sale.status === 'anulada') return;
       if (!counts[sale.productId]) {
         counts[sale.productId] = {
           name: sale.productName,
@@ -124,10 +136,11 @@ export default function SalesReportPanel({
       .slice(0, 5);
   }, [filteredSales]);
 
-  // Profit by Brand (Ganancia por marca)
+  // Profit by Brand
   const brandProfits = useMemo(() => {
     const profits: Record<string, { brand: string; profit: number; salesCount: number }> = {};
     filteredSales.forEach((sale) => {
+      if (sale.status === 'anulada') return;
       const b = sale.brand || 'Otros';
       if (!profits[b]) {
         profits[b] = { brand: b, profit: 0, salesCount: 0 };
@@ -148,6 +161,7 @@ export default function SalesReportPanel({
 
     const headers = [
       'ID Venta',
+      'Estado',
       'Fecha',
       'Hora',
       'Producto',
@@ -160,7 +174,9 @@ export default function SalesReportPanel({
       'Cliente Deudor',
       'Estado Pago',
       'Monto Deuda',
-      'Celular Registrado'
+      'Operador Registrador',
+      'Motivo Anulacion',
+      'Anulado Por'
     ];
 
     const rows = filteredSales.map((sale) => {
@@ -170,6 +186,7 @@ export default function SalesReportPanel({
 
       return [
         sale.id,
+        sale.status === 'anulada' ? 'ANULADA' : 'COMPLETADA',
         dateStr,
         timeStr,
         `"${sale.productName.replace(/"/g, '""')}"`,
@@ -177,12 +194,14 @@ export default function SalesReportPanel({
         sale.sellingPrice,
         sale.costPrice,
         sale.quantity,
-        sale.profit,
+        sale.status === 'anulada' ? 0 : sale.profit,
         sale.paymentMethod,
         `"${(sale.debtorName || '').replace(/"/g, '""')}"`,
         sale.paymentMethod === 'Crédito' ? (sale.isPaid ? 'Pagado' : 'Pendiente') : 'Pagado',
         sale.paymentMethod === 'Crédito' ? (sale.debtAmount !== undefined ? sale.debtAmount : (sale.sellingPrice * sale.quantity)) : 0,
-        `"${sale.deviceModel.replace(/"/g, '""')}"`
+        `"${sale.operatorName || sale.operatorEmail || ''}"`,
+        `"${(sale.voidReason || '').replace(/"/g, '""')}"`,
+        `"${(sale.voidBy || '').replace(/"/g, '""')}"`
       ];
     });
 
@@ -192,32 +211,13 @@ export default function SalesReportPanel({
     
     const link = document.createElement('a');
     link.setAttribute('href', url);
-    link.setAttribute('download', `ventas_reporte_${timeFilter}_${new Date().toISOString().slice(0, 10)}.csv`);
+    link.setAttribute('download', `ventas_${timeFilter}_${new Date().toISOString().slice(0, 10)}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
-  const handleClearHistory = () => {
-    setIsConfirmClearAllOpen(true);
-  };
-
-  const handleExecuteClearHistory = async () => {
-    await onClearAllVentas();
-  };
-
-  const handleDeleteIndividual = (id: string, productName: string) => {
-    setSaleToDelete({ id, name: productName });
-  };
-
-  const handleExecuteDeleteIndividual = async () => {
-    if (saleToDelete) {
-      await onDeleteVenta(saleToDelete.id);
-      setSaleToDelete(null);
-    }
-  };
-
-  // Mark debt as paid in full
+  // Mark debt as paid
   const handleExecuteConfirmPayDebt = async () => {
     if (debtToPay && onUpdateVenta) {
       await onUpdateVenta(debtToPay.id, { isPaid: true });
@@ -226,32 +226,37 @@ export default function SalesReportPanel({
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 text-slate-100">
       {/* Time filters header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3.5 bg-white/5 border border-white/10 p-4 rounded-2xl relative overflow-hidden backdrop-blur-md">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 bg-white/5 backdrop-blur-lg border border-white/10 p-4 sm:p-5 rounded-2xl shadow-lg">
         <div>
-          <span className="text-[10px] uppercase font-bold tracking-widest text-indigo-400 font-mono">Panel Estadístico</span>
-          <h2 className="text-lg font-bold text-white mt-0.5">Reportes & Estadísticas</h2>
+          <span className="text-[11px] uppercase font-bold tracking-wider text-emerald-400 font-mono">
+            Panel Estadístico
+          </span>
+          <h2 className="text-base sm:text-lg font-bold text-white mt-0.5">
+            Reportes, Ventas & Control de Deudas
+          </h2>
         </div>
 
-        {/* Horizontal scroll time filters */}
-        <div className="flex items-center gap-1.5 overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0 scrollbar-none">
+        {/* Temporal Filters */}
+        <div className="flex items-center gap-1 bg-slate-900/80 border border-white/10 p-1 rounded-xl">
           {(['4h', '24h', '7d', 'all'] as const).map((filter) => {
             const label = {
-              '4h': 'Últimas 4 Horas',
-              '24h': 'Últimas 24 Horas',
-              '7d': 'Última Semana',
-              'all': 'Todo el Historial'
+              '4h': '4 Horas',
+              '24h': '24 Horas',
+              '7d': '7 Días',
+              'all': 'Histórico',
             }[filter];
 
             return (
               <button
                 key={filter}
+                type="button"
                 onClick={() => setTimeFilter(filter)}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
+                className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-all cursor-pointer ${
                   timeFilter === filter
-                    ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/20'
-                    : 'bg-white/5 hover:bg-white/10 text-slate-300 border border-white/5'
+                    ? 'bg-indigo-600 text-white shadow-md font-semibold'
+                    : 'text-slate-400 hover:text-white'
                 }`}
               >
                 {label}
@@ -261,133 +266,90 @@ export default function SalesReportPanel({
         </div>
       </div>
 
-      {/* Stats Cards Row */}
+      {/* Main KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Money Sold total card */}
-        <div className="bg-slate-900 border border-white/10 p-5 rounded-2xl relative overflow-hidden flex flex-col justify-between">
-          <div className="absolute top-[-20%] right-[-10%] w-24 h-24 rounded-full bg-indigo-500/10 blur-xl pointer-events-none" />
-          <div className="flex justify-between items-start">
-            <div>
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest font-mono">Dinero Vendido Total</span>
-              <h3 className="text-2xl font-black text-white mt-1.5 font-mono">
-                ${stats.totalVendidos.toLocaleString('es-CL')}
-              </h3>
-            </div>
-            <span className="p-2.5 bg-indigo-500/15 text-indigo-400 rounded-xl">
-              <DollarSign className="w-5 h-5" />
-            </span>
+        {/* Total Facturado */}
+        <div className="bg-white/5 backdrop-blur-lg border border-white/10 rounded-2xl p-4 sm:p-5 shadow-lg">
+          <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
+            <span>Ingreso Neto (Ventas Activas)</span>
+            <DollarSign className="w-4 h-4 text-emerald-400" />
           </div>
+          <div className="text-2xl font-bold font-mono tabular-nums text-white">
+            ${stats.totalVendidos.toLocaleString('es-CL')}
+          </div>
+          <p className="text-[11px] text-slate-500 mt-1">
+            Excluye automáticamente ventas anuladas
+          </p>
+        </div>
 
-          <div className="pt-4 mt-4 border-t border-white/5 flex flex-wrap gap-x-2 gap-y-1 justify-between text-[10px] text-slate-400 font-semibold font-mono">
-            <span className="text-emerald-400">💵 Ef: ${stats.totalEfectivo.toLocaleString('es-CL')}</span>
-            <span className="text-indigo-400">🏦 Tr: ${stats.totalTransferencia.toLocaleString('es-CL')}</span>
+        {/* Ganancia Estimada */}
+        <div className="bg-white/5 backdrop-blur-lg border border-white/10 rounded-2xl p-4 sm:p-5 shadow-lg">
+          <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
+            <span>Ganancia Real</span>
+            <TrendingUp className="w-4 h-4 text-emerald-400" />
+          </div>
+          <div className="text-2xl font-bold font-mono tabular-nums text-emerald-400">
+            +${stats.totalProfit.toLocaleString('es-CL')}
+          </div>
+          <div className="flex items-center gap-2 mt-1 text-[11px] text-slate-400">
+            <span>Margen neto sobre costo</span>
           </div>
         </div>
 
-        {/* profit total card */}
-        <div className="bg-slate-900 border border-emerald-500/20 bg-emerald-950/5 p-5 rounded-2xl relative overflow-hidden flex flex-col justify-between">
-          <div className="absolute top-[-20%] right-[-10%] w-24 h-24 rounded-full bg-emerald-500/15 blur-xl pointer-events-none" />
-          <div className="flex justify-between items-start">
-            <div>
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest font-mono">Ganancia Estimada Real</span>
-              <h3 className="text-2xl font-black text-emerald-400 mt-1.5 font-mono">
-                ${stats.totalProfit.toLocaleString('es-CL')}
-              </h3>
+        {/* Efectivo vs Transferencias */}
+        <div className="bg-white/5 backdrop-blur-lg border border-white/10 rounded-2xl p-4 sm:p-5 shadow-lg">
+          <div className="text-xs text-slate-400 mb-2 font-medium">Medios de Cobro</div>
+          <div className="space-y-1.5 text-xs font-mono">
+            <div className="flex justify-between items-center">
+              <span className="text-slate-400">Efectivo:</span>
+              <span className="font-bold text-white tabular-nums">
+                ${stats.totalEfectivo.toLocaleString('es-CL')}
+              </span>
             </div>
-            <span className="p-2.5 bg-emerald-500/15 text-emerald-400 rounded-xl">
-              <TrendingUp className="w-5 h-5" />
-            </span>
-          </div>
-
-          <div className="pt-4 mt-4 border-t border-white/5 flex items-center gap-1.5 text-xs text-slate-400">
-            <span className="font-bold text-emerald-400 font-mono">
-              {stats.totalVendidos > 0 ? ((stats.totalProfit / stats.totalVendidos) * 100).toFixed(1) : 0}%
-            </span>
-            <span>de margen de ganancia neto.</span>
+            <div className="flex justify-between items-center">
+              <span className="text-slate-400">Transferencia:</span>
+              <span className="font-bold text-white tabular-nums">
+                ${stats.totalTransferencia.toLocaleString('es-CL')}
+              </span>
+            </div>
           </div>
         </div>
 
-        {/* Pending Debts card */}
-        <div className={`bg-slate-900 p-5 rounded-2xl relative overflow-hidden flex flex-col justify-between border transition-all ${
-          deudoresSales.length > 0 
-            ? 'border-amber-500/30 bg-amber-500/[0.02]' 
-            : 'border-white/10'
-        }`}>
-          <div className="absolute top-[-20%] right-[-10%] w-24 h-24 rounded-full bg-amber-500/10 blur-xl pointer-events-none" />
-          <div className="flex justify-between items-start">
-            <div>
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest font-mono">Deudas por Cobrar</span>
-              <h3 className={`text-2xl font-black mt-1.5 font-mono ${deudoresSales.length > 0 ? 'text-amber-400' : 'text-slate-300'}`}>
-                ${stats.totalCreditoPendiente.toLocaleString('es-CL')}
-              </h3>
-            </div>
-            <span className={`p-2.5 rounded-xl ${deudoresSales.length > 0 ? 'bg-amber-500/15 text-amber-400 animate-pulse' : 'bg-slate-800 text-slate-400'}`}>
-              📋
+        {/* Deudas por Cobrar */}
+        <div className="bg-white/5 backdrop-blur-lg border border-white/10 rounded-2xl p-4 sm:p-5 shadow-lg">
+          <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
+            <span>Deudas Pendientes</span>
+            <span className="text-[11px] font-mono text-amber-300 bg-amber-500/15 border border-amber-500/25 px-2 py-0.5 rounded-lg">
+              {deudoresSales.length} cliente(s)
             </span>
           </div>
-
-          <div className="pt-4 mt-4 border-t border-white/5 flex items-center gap-1.5 text-xs text-slate-400">
-            <span className={`font-mono font-bold ${deudoresSales.length > 0 ? 'text-amber-400' : 'text-slate-300'}`}>
-              {deudoresSales.length} {deudoresSales.length === 1 ? 'deudor' : 'deudores'}
-            </span>
-            <span>pendientes de pago.</span>
+          <div className="text-2xl font-bold font-mono tabular-nums text-amber-400">
+            ${stats.totalCreditoPendiente.toLocaleString('es-CL')}
           </div>
-        </div>
-
-        {/* Volume of operations */}
-        <div className="bg-slate-900 border border-white/10 p-5 rounded-2xl relative overflow-hidden flex flex-col justify-between">
-          <div className="absolute top-[-20%] right-[-10%] w-24 h-24 rounded-full bg-indigo-500/5 blur-xl pointer-events-none" />
-          <div className="flex justify-between items-start">
-            <div>
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest font-mono">Transacciones Registradas</span>
-              <h3 className="text-2xl font-black text-white mt-1.5 font-mono">
-                {filteredSales.length} {filteredSales.length === 1 ? 'Venta' : 'Ventas'}
-              </h3>
-            </div>
-            <span className="p-2.5 bg-indigo-500/10 text-indigo-300 rounded-xl">
-              <Clock className="w-5 h-5" />
-            </span>
-          </div>
-
-          <div className="pt-4 mt-4 border-t border-white/5 flex items-center gap-1.5 text-xs text-slate-400">
-            <span>Período:</span>
-            <span className="text-white font-bold font-mono">
-              {timeFilter === '4h' ? 'Últimas 4 horas' : timeFilter === '24h' ? 'Últimas 24 horas' : timeFilter === '7d' ? 'Última semana' : 'Todo el historial'}
-            </span>
-          </div>
+          <p className="text-[11px] text-slate-500 mt-1">Créditos pendientes de cobro</p>
         </div>
       </div>
 
-      {/* Bento content layout: Top 5 and Brand Profits charts */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-        {/* Top 5 Products list */}
-        <div className="bg-slate-900 border border-white/10 rounded-2xl p-5 space-y-4">
-          <div className="flex justify-between items-center pb-2 border-b border-white/5">
-            <h3 className="text-sm font-bold text-white flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-indigo-400" /> Los 5 Productos más Vendidos
-            </h3>
-            <span className="text-[10px] font-mono font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full">Demanda</span>
-          </div>
-
+      {/* Analytics: Top Products and Brand Performance */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {/* Top 5 Products */}
+        <div className="bg-white/5 backdrop-blur-lg border border-white/10 rounded-2xl p-4 sm:p-5 shadow-lg">
+          <h3 className="text-sm font-semibold text-white mb-3">Top 5 Productos más Vendidos</h3>
           {topProducts.length === 0 ? (
-            <div className="p-10 text-center text-slate-500 text-xs">
-              Sin registros de ventas en este período temporal.
-            </div>
+            <p className="text-xs text-slate-500 py-6 text-center">Sin ventas en este período</p>
           ) : (
-            <div className="space-y-3">
+            <div className="space-y-2">
               {topProducts.map((p, idx) => (
-                <div key={idx} className="flex justify-between items-center p-3 bg-white/5 hover:bg-white/10 border border-white/5 rounded-xl transition-all">
-                  <div className="flex items-center gap-3">
-                    <span className="text-sm font-black font-mono text-slate-500 w-5 text-center">#{idx + 1}</span>
-                    <div className="space-y-0.5">
-                      <span className="text-xs font-bold text-white block truncate max-w-[160px]">{p.name}</span>
-                      <span className="text-[10px] text-slate-400 uppercase tracking-wider font-mono font-semibold">{p.brand}</span>
-                    </div>
+                <div key={idx} className="flex items-center justify-between p-2.5 bg-slate-900/60 border border-white/5 rounded-xl text-xs">
+                  <div>
+                    <span className="font-semibold text-white">{p.name}</span>
+                    <span className="text-slate-400 ml-2">({p.brand})</span>
                   </div>
-
                   <div className="text-right font-mono">
-                    <span className="text-xs font-bold text-white block">{p.quantity} u</span>
-                    <span className="text-[10px] text-slate-400 font-semibold">${p.revenue.toLocaleString('es-CL')}</span>
+                    <span className="font-bold text-white">{p.quantity} unid.</span>
+                    <span className="text-slate-400 block text-[10px] tabular-nums">
+                      ${p.revenue.toLocaleString('es-CL')}
+                    </span>
                   </div>
                 </div>
               ))}
@@ -395,270 +357,142 @@ export default function SalesReportPanel({
           )}
         </div>
 
-        {/* Profit by Brand list (Ganancia por marca) */}
-        <div className="bg-slate-900 border border-white/10 rounded-2xl p-5 space-y-4">
-          <div className="flex justify-between items-center pb-2 border-b border-white/5">
-            <h3 className="text-sm font-bold text-white flex items-center gap-2">
-              <Layers className="w-4 h-4 text-emerald-400" /> Rendimiento de Ganancias por Marca
-            </h3>
-            <span className="text-[10px] font-mono font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-full">Margen</span>
-          </div>
-
+        {/* Brand Performance */}
+        <div className="bg-white/5 backdrop-blur-lg border border-white/10 rounded-2xl p-4 sm:p-5 shadow-lg">
+          <h3 className="text-sm font-semibold text-white mb-3">Ganancia por Marca</h3>
           {brandProfits.length === 0 ? (
-            <div className="p-10 text-center text-slate-500 text-xs">
-              Sin registros de ganancias o ventas por marca.
-            </div>
+            <p className="text-xs text-slate-500 py-6 text-center">Sin ventas en este período</p>
           ) : (
-            <div className="space-y-3.5">
-              {brandProfits.map((bp, idx) => {
-                const totalProfit = stats.totalProfit;
-                const percentageOfTotal = totalProfit > 0 ? (bp.profit / totalProfit) * 100 : 0;
-
-                return (
-                  <div key={idx} className="flex justify-between items-center p-3 bg-white/5 hover:bg-white/10 border border-white/5 rounded-xl transition-all">
-                    <div className="space-y-0.5">
-                      <span className="text-xs font-bold text-white uppercase tracking-wider font-mono">{bp.brand}</span>
-                      <p className="text-[10px] text-slate-400">
-                        {bp.salesCount} {bp.salesCount === 1 ? 'venta' : 'ventas'} registradas
-                      </p>
-                    </div>
-
-                    <div className="text-right">
-                      <span className="text-xs font-bold text-emerald-400 font-mono block">
-                        +${bp.profit.toLocaleString('es-CL')}
-                      </span>
-                      <span className="text-[9px] text-indigo-400 font-bold font-mono">
-                        {percentageOfTotal.toFixed(1)}% del total
-                      </span>
-                    </div>
+            <div className="space-y-2">
+              {brandProfits.map((bp, idx) => (
+                <div key={idx} className="flex items-center justify-between p-2.5 bg-slate-900/60 border border-white/5 rounded-xl text-xs">
+                  <div>
+                    <span className="font-semibold text-white uppercase font-mono">{bp.brand}</span>
+                    <span className="text-slate-400 ml-2 text-[11px]">
+                      {bp.salesCount} venta(s)
+                    </span>
                   </div>
-                );
-              })}
+                  <div className="text-right font-mono font-bold text-emerald-400 tabular-nums">
+                    +${bp.profit.toLocaleString('es-CL')}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>
       </div>
 
       {/* Detailed Transaction History Table */}
-      <div className="bg-slate-900 border border-white/10 rounded-2xl overflow-hidden shadow-xl">
-        <div className="px-5 py-4 bg-slate-800/40 border-b border-white/10 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-          <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4 w-full md:w-auto">
-            <div>
-              <h3 className="text-sm font-bold text-white">Historial & Cuentas de Cobro</h3>
-              <p className="text-[10px] text-slate-400 leading-normal font-medium mt-0.5">Visualiza el registro histórico de ventas o gestiona las cuentas deudores pendientes.</p>
-            </div>
-            
-            {/* Tab switch inside table */}
-            <div className="flex bg-slate-950 p-1 rounded-xl border border-white/5 shrink-0 self-stretch sm:self-auto justify-center sm:justify-start">
-              <button
-                type="button"
-                onClick={() => setSubTab('ventas')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                  subTab === 'ventas'
-                    ? 'bg-indigo-600 text-white'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                📊 Ventas
-              </button>
-              <button
-                type="button"
-                onClick={() => setSubTab('deudores')}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 relative ${
-                  subTab === 'deudores'
-                    ? 'bg-amber-600 text-white shadow-md shadow-amber-500/10'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                📋 Deudores
-                {deudoresSales.length > 0 && (
-                  <span className="flex h-4 w-4 items-center justify-center rounded-full bg-rose-500 text-[8px] font-bold text-white animate-pulse">
-                    {deudoresSales.length}
-                  </span>
-                )}
-              </button>
-            </div>
+      <div className="bg-white/5 backdrop-blur-lg border border-white/10 rounded-2xl overflow-hidden shadow-lg">
+        {/* Controls Bar */}
+        <div className="px-5 py-4 border-b border-white/10 flex flex-col md:flex-row justify-between items-start md:items-center gap-3 bg-slate-900/40">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSubTab('ventas')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                subTab === 'ventas'
+                  ? 'bg-indigo-600 text-white shadow-md'
+                  : 'text-slate-400 hover:text-white bg-white/5 border border-white/5'
+              }`}
+            >
+              Historial de Ventas ({filteredSales.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setSubTab('deudores')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
+                subTab === 'deudores'
+                  ? 'bg-amber-600 text-white shadow-md'
+                  : 'text-amber-300 bg-amber-500/10 border border-amber-500/20 hover:bg-amber-500/20'
+              }`}
+            >
+              <span>Clientes Deudores</span>
+              {deudoresSales.length > 0 && (
+                <span className="px-1.5 py-0.2 bg-white text-amber-900 text-[10px] rounded-full font-bold">
+                  {deudoresSales.length}
+                </span>
+              )}
+            </button>
           </div>
 
-          <div className="flex items-center gap-2 w-full md:w-auto">
+          <div className="flex items-center gap-2">
             {subTab === 'ventas' && (
               <>
-                {/* Export sales CSV */}
-                <button
-                  onClick={handleExportSalesCSV}
-                  className="flex-1 md:flex-none px-3.5 py-2 hover:bg-emerald-500/10 hover:text-emerald-300 border border-emerald-500/30 text-emerald-400 bg-emerald-500/5 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
-                  title="Descargar archivo Excel CSV de ventas"
+                {/* Status filter */}
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value as any)}
+                  aria-label="Filtrar por estado"
+                  className="px-2.5 py-1.5 bg-slate-900 border border-white/10 rounded-lg text-xs text-slate-200 focus:outline-none"
                 >
-                  <FileSpreadsheet className="w-3.5 h-3.5" />
-                  <span>Exportar XLS</span>
-                </button>
+                  <option value="all">Todas las ventas</option>
+                  <option value="completada">Solo completadas</option>
+                  <option value="anulada">Solo anuladas</option>
+                </select>
 
-                {/* Clear database button */}
                 <button
-                  onClick={handleClearHistory}
-                  className="px-3.5 py-2 hover:bg-rose-500/10 hover:text-rose-300 border border-rose-500/20 text-slate-400 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
-                  title="Borrar todas las ventas realizadas"
+                  type="button"
+                  onClick={handleExportSalesCSV}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 bg-white/10 hover:bg-white/15 border border-white/10 text-slate-200 rounded-lg text-xs font-medium transition-colors cursor-pointer"
                 >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">Limpiar Todo</span>
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Descargar CSV</span>
                 </button>
               </>
             )}
           </div>
         </div>
 
-        {/* Table View wrapper */}
+        {/* Content */}
         <div className="overflow-x-auto">
           {subTab === 'deudores' ? (
             deudoresSales.length === 0 ? (
-              <div className="p-16 text-center text-slate-400 space-y-2">
-                <AlertCircle className="w-8 h-8 text-amber-500 mx-auto" />
-                <p className="text-xs font-semibold">¡Todo al día! No hay clientes con deudas pendientes registradas.</p>
+              <div className="py-12 text-center text-xs text-slate-400">
+                <CheckCircle2 className="w-8 h-8 text-emerald-400 mx-auto mb-2" />
+                <p className="font-semibold text-slate-200">¡Al día! No hay clientes con saldos pendientes.</p>
               </div>
             ) : (
-              <table className="w-full text-left border-collapse">
+              <table className="w-full text-left text-xs border-collapse">
                 <thead>
-                  <tr className="bg-slate-950/40 text-[10px] text-slate-400 font-bold uppercase tracking-wider font-mono border-b border-white/5">
+                  <tr className="bg-slate-900/80 text-[11px] text-slate-400 border-b border-white/10 uppercase tracking-wider font-semibold font-mono">
                     <th className="py-3 px-4">Fecha</th>
                     <th className="py-3 px-4">Cliente Deudor</th>
                     <th className="py-3 px-4">Producto</th>
                     <th className="py-3 px-4 text-right">Cantidad</th>
                     <th className="py-3 px-4 text-right">Monto que Debe</th>
-                    <th className="py-3 px-4 text-center">Acciones</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/5 text-xs text-slate-200">
-                  {deudoresSales.map((sale) => {
-                    const d = new Date(sale.timestamp);
-                    const dateStr = d.toLocaleDateString('es-CL', { month: 'short', day: '2-digit' });
-                    const timeStr = d.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
-                    const amountOwed = sale.debtAmount !== undefined ? sale.debtAmount : (sale.sellingPrice * sale.quantity);
-
-                    return (
-                      <tr key={sale.id} className="hover:bg-white/5 transition-all">
-                        <td className="py-3.5 px-4 font-mono text-[10px] text-slate-400">
-                          <span className="block text-white font-bold">{dateStr}</span>
-                          <span>{timeStr}</span>
-                        </td>
-                        <td className="py-3.5 px-4">
-                          <span className="font-extrabold text-amber-300 text-sm flex items-center gap-1.5">
-                            👤 {sale.debtorName || 'Cliente Anónimo'}
-                          </span>
-                        </td>
-                        <td className="py-3.5 px-4">
-                          <span className="font-bold text-white block truncate max-w-[200px]">{sale.productName}</span>
-                          <span className="text-[10px] text-indigo-300 bg-indigo-500/10 px-1.5 py-0.5 rounded font-bold font-mono inline-block mt-0.5">{sale.brand}</span>
-                        </td>
-                        <td className="py-3.5 px-4 text-right font-mono font-bold text-slate-300">
-                          {sale.quantity} u
-                        </td>
-                        <td className="py-3.5 px-4 text-right font-mono font-bold text-amber-400 text-sm">
-                          ${amountOwed.toLocaleString('es-CL')}
-                        </td>
-                        <td className="py-3.5 px-4">
-                          <div className="flex items-center justify-center gap-2">
-                            <button
-                              type="button"
-                              onClick={() => setDebtToPay(sale)}
-                              className="px-2.5 py-1.5 bg-emerald-500/15 hover:bg-emerald-600 border border-emerald-500/30 text-emerald-300 hover:text-white font-bold rounded-lg text-[10px] transition-all flex items-center gap-1 cursor-pointer"
-                              title="Registrar cobro de esta deuda"
-                            >
-                              ✔ Marcar Pagado
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteIndividual(sale.id, sale.productName)}
-                              className="text-slate-400 hover:text-rose-400 p-1.5 hover:bg-rose-500/10 rounded-lg transition-colors cursor-pointer"
-                              title="Eliminar registro"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            )
-          ) : (
-            filteredSales.length === 0 ? (
-              <div className="p-16 text-center text-slate-400 space-y-2">
-                <AlertCircle className="w-8 h-8 text-slate-500 mx-auto" />
-                <p className="text-xs font-semibold">No se encontraron ventas registradas en el período seleccionado.</p>
-              </div>
-            ) : (
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-slate-950/40 text-[10px] text-slate-400 font-bold uppercase tracking-wider font-mono border-b border-white/5">
-                    <th className="py-3 px-4">Fecha/Hora</th>
-                    <th className="py-3 px-4">Producto</th>
-                    <th className="py-3 px-4">Pago</th>
-                    <th className="py-3 px-4 text-right">Precio unit</th>
-                    <th className="py-3 px-4 text-right">Cantidad</th>
-                    <th className="py-3 px-4 text-right">Ganancia</th>
-                    <th className="py-3 px-4">Dispositivo</th>
                     <th className="py-3 px-4 text-center">Acción</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-white/5 text-xs text-slate-200">
-                  {filteredSales.map((sale) => {
+                <tbody className="divide-y divide-white/5 text-slate-200">
+                  {deudoresSales.map((sale) => {
                     const d = new Date(sale.timestamp);
                     const dateStr = d.toLocaleDateString('es-CL', { month: 'short', day: '2-digit' });
-                    const timeStr = d.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
+                    const amountOwed = sale.debtAmount !== undefined ? sale.debtAmount : (sale.sellingPrice * sale.quantity);
 
                     return (
-                      <tr key={sale.id} className="hover:bg-white/5 transition-all">
-                        <td className="py-3.5 px-4 font-mono text-[10px] text-slate-400">
-                          <span className="block text-white font-bold">{dateStr}</span>
-                          <span>{timeStr}</span>
+                      <tr key={sale.id} className="hover:bg-white/5 transition-colors">
+                        <td className="py-3 px-4 font-mono text-[11px] text-slate-400">{dateStr}</td>
+                        <td className="py-3 px-4 font-semibold text-amber-300">
+                          👤 {sale.debtorName || 'Cliente Anónimo'}
                         </td>
-                        <td className="py-3.5 px-4">
-                          <span className="font-bold text-white block truncate max-w-[160px]">{sale.productName}</span>
-                          <span className="text-[10px] text-indigo-300 bg-indigo-500/10 px-1.5 py-0.5 rounded font-bold font-mono inline-block mt-0.5">{sale.brand}</span>
+                        <td className="py-3 px-4">
+                          <span className="font-medium text-white">{sale.productName}</span>
+                          <span className="text-[11px] text-slate-400 block">{sale.brand}</span>
                         </td>
-                        <td className="py-3.5 px-4">
-                          {sale.paymentMethod === 'Crédito' ? (
-                            <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold border flex items-center justify-center gap-1 w-max ${
-                              sale.isPaid 
-                                ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20' 
-                                : 'bg-amber-500/10 text-amber-300 border-amber-500/20 animate-pulse'
-                            }`}>
-                              📋 {sale.isPaid ? 'Crédito (Pagado)' : `Crédito (${sale.debtorName || 'Deuda'}: $${(sale.debtAmount !== undefined ? sale.debtAmount : (sale.sellingPrice * sale.quantity)).toLocaleString('es-CL')})`}
-                            </span>
-                          ) : (
-                            <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold border ${
-                              sale.paymentMethod === 'Efectivo' 
-                                ? 'bg-emerald-500/10 text-emerald-300 border-emerald-500/20' 
-                                : 'bg-indigo-500/10 text-indigo-300 border-indigo-500/20'
-                            }`}>
-                              {sale.paymentMethod}
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-3.5 px-4 text-right font-mono font-bold">
-                          ${sale.sellingPrice.toLocaleString('es-CL')}
-                        </td>
-                        <td className="py-3.5 px-4 text-right font-mono font-bold text-slate-300">
+                        <td className="py-3 px-4 text-right font-mono font-bold text-slate-300">
                           {sale.quantity} u
                         </td>
-                        <td className="py-3.5 px-4 text-right font-mono font-bold text-emerald-400">
-                          +${sale.profit.toLocaleString('es-CL')}
+                        <td className="py-3 px-4 text-right font-mono font-bold text-amber-400 text-sm tabular-nums">
+                          ${amountOwed.toLocaleString('es-CL')}
                         </td>
-                        <td className="py-3.5 px-4 text-slate-400 font-mono text-[10px]">
-                          <div className="flex items-center gap-1.5 truncate max-w-[120px]" title={sale.deviceModel}>
-                            <Smartphone className="w-3 h-3 text-slate-500 flex-shrink-0" />
-                            <span>{sale.deviceModel}</span>
-                          </div>
-                        </td>
-                        <td className="py-3.5 px-4 text-center">
+                        <td className="py-3 px-4 text-center">
                           <button
                             type="button"
-                            onClick={() => handleDeleteIndividual(sale.id, sale.productName)}
-                            className="text-slate-400 hover:text-rose-400 p-1.5 hover:bg-rose-500/10 rounded-lg transition-colors cursor-pointer"
-                            title="Eliminar registro de venta"
+                            onClick={() => setDebtToPay(sale)}
+                            className="px-2.5 py-1 bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/25 text-emerald-300 rounded-lg text-xs font-medium transition-colors cursor-pointer"
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            Marcar Pagado
                           </button>
                         </td>
                       </tr>
@@ -667,35 +501,125 @@ export default function SalesReportPanel({
                 </tbody>
               </table>
             )
+          ) : filteredSales.length === 0 ? (
+            <div className="py-12 text-center text-xs text-slate-400">
+              No se encontraron ventas para los filtros seleccionados.
+            </div>
+          ) : (
+            <table className="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr className="bg-slate-900/80 text-[11px] text-slate-400 border-b border-white/10 uppercase tracking-wider font-semibold font-mono">
+                  <th className="py-3 px-4">Fecha</th>
+                  <th className="py-3 px-4">Producto</th>
+                  <th className="py-3 px-4">Estado</th>
+                  <th className="py-3 px-4">Pago</th>
+                  <th className="py-3 px-4 text-right">P. Unitario</th>
+                  <th className="py-3 px-4 text-right">Cant.</th>
+                  <th className="py-3 px-4 text-right">Total</th>
+                  <th className="py-3 px-4">Operador</th>
+                  <th className="py-3 px-4 text-center">Acciones</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5 text-slate-200">
+                {filteredSales.map((sale) => {
+                  const d = new Date(sale.timestamp);
+                  const dateStr = d.toLocaleDateString('es-CL', { month: 'short', day: '2-digit' });
+                  const timeStr = d.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' });
+                  const isVoided = sale.status === 'anulada';
+                  const totalSale = sale.sellingPrice * sale.quantity;
+
+                  return (
+                    <tr
+                      key={sale.id}
+                      className={`transition-colors ${
+                        isVoided ? 'bg-rose-500/5 text-slate-500' : 'hover:bg-white/5'
+                      }`}
+                    >
+                      <td className="py-3 px-4 font-mono text-[11px] text-slate-400">
+                        <span className="block text-slate-200 font-medium">{dateStr}</span>
+                        <span>{timeStr}</span>
+                      </td>
+
+                      <td className="py-3 px-4">
+                        <span className={`font-semibold ${isVoided ? 'line-through text-slate-500' : 'text-white'}`}>
+                          {sale.productName}
+                        </span>
+                        <span className="text-[11px] text-slate-400 block">{sale.brand}</span>
+                      </td>
+
+                      <td className="py-3 px-4">
+                        {isVoided ? (
+                          <div className="space-y-0.5">
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold text-rose-300 bg-rose-500/15 border border-rose-500/25 px-2 py-0.5 rounded-lg">
+                              <XCircle className="w-3 h-3" /> Anulada
+                            </span>
+                            {sale.voidReason && (
+                              <p className="text-[10px] text-rose-400 line-clamp-1 max-w-[180px]" title={sale.voidReason}>
+                                {sale.voidReason}
+                              </p>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-[10px] font-medium text-emerald-300 bg-emerald-500/15 border border-emerald-500/25 px-2 py-0.5 rounded-lg">
+                            <CheckCircle2 className="w-3 h-3" /> Completada
+                          </span>
+                        )}
+                      </td>
+
+                      <td className="py-3 px-4">
+                        <span className="font-medium text-slate-300">{sale.paymentMethod}</span>
+                        {sale.paymentMethod === 'Crédito' && (
+                          <span className="block text-[10px] text-amber-400 font-mono">
+                            {sale.isPaid ? 'Cobrado' : `Debe ${sale.debtorName || 'Cliente'}`}
+                          </span>
+                        )}
+                      </td>
+
+                      <td className="py-3 px-4 text-right font-mono tabular-nums text-slate-300">
+                        ${sale.sellingPrice.toLocaleString('es-CL')}
+                      </td>
+
+                      <td className="py-3 px-4 text-right font-mono font-bold text-slate-200">
+                        {sale.quantity}
+                      </td>
+
+                      <td className="py-3 px-4 text-right font-mono font-bold text-white tabular-nums">
+                        ${totalSale.toLocaleString('es-CL')}
+                      </td>
+
+                      <td className="py-3 px-4 text-xs text-slate-400">
+                        <span className="font-medium text-slate-200">
+                          {sale.operatorName || sale.operatorEmail || 'Administrador'}
+                        </span>
+                      </td>
+
+                      <td className="py-3 px-4 text-center">
+                        {!isVoided ? (
+                          <button
+                            type="button"
+                            onClick={() => onVoidVenta(sale)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs text-amber-300 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/25 rounded-lg font-medium transition-colors cursor-pointer"
+                            title="Anular venta y reponer stock"
+                          >
+                            <RotateCcw className="w-3 h-3" />
+                            <span>Anular</span>
+                          </button>
+                        ) : (
+                          <span className="text-[11px] text-slate-500 italic">
+                            Repuesto
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           )}
         </div>
       </div>
 
-      {/* Confirm modal for clearing all sales logs */}
-      <ConfirmModal
-        isOpen={isConfirmClearAllOpen}
-        onClose={() => setIsConfirmClearAllOpen(false)}
-        onConfirm={handleExecuteClearHistory}
-        title="¿Eliminar todo el historial?"
-        message="🚨 ¡ATENCIÓN DEFINITIVA! ¿Deseas eliminar TODO el historial de ventas? Esta acción es irreversible y borrará permanentemente todos los registros en Firestore."
-        confirmText="Sí, Eliminar Todo"
-        cancelText="No, Cancelar"
-        type="danger"
-      />
-
-      {/* Confirm modal for deleting individual sale log */}
-      <ConfirmModal
-        isOpen={!!saleToDelete}
-        onClose={() => setSaleToDelete(null)}
-        onConfirm={handleExecuteDeleteIndividual}
-        title="¿Eliminar transacción?"
-        message={saleToDelete ? `¿Estás seguro de que deseas quitar la transacción de venta de "${saleToDelete.name}" del historial?` : ''}
-        confirmText="Sí, Eliminar"
-        cancelText="No, Cancelar"
-        type="danger"
-      />
-
-      {/* Confirm modal for registering payment of debt */}
+      {/* Pay Debt Modal */}
       <ConfirmModal
         isOpen={!!debtToPay}
         onClose={() => setDebtToPay(null)}

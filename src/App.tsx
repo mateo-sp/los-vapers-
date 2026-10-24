@@ -10,43 +10,43 @@ import {
   Search,
   Package,
   TrendingUp,
-  AlertTriangle,
-  Download,
-  SlidersHorizontal,
   DollarSign,
-  Briefcase,
   History,
-  X,
   FileSpreadsheet,
-  Layers,
-  Sparkles,
-  Info,
-  Bell,
-  Sliders,
   MessageSquare,
+  Trash2,
+  Download,
+  LogOut,
+  ShieldCheck,
+  UserCheck,
+  Layers
 } from 'lucide-react';
 
 import {
   subscribeToProducts,
   addProduct,
   updateProduct,
-  deleteProduct,
-  adjustStock,
+  moveToTrashProduct,
+  restoreProductFromTrash,
+  permanentDeleteProduct,
+  emptyTrash,
+  adjustStockWithReason,
+  executeSaleTransaction,
+  voidSaleTransaction,
   subscribeToActivityLogs,
   clearAllActivityLogs,
-  subscribeToCategoryThresholds,
   subscribeToVentas,
-  addVenta,
-  deleteVenta,
   clearAllVentas,
-  updateVenta
+  updateVenta,
+  exportAllDataAsJson,
+  seedOfficialCatalog
 } from './services/dbService';
 import { Product, ProductInput, ActivityLog, Venta } from './types';
+import { AuthProvider, useAuth } from './context/AuthContext';
 import StatsCard from './components/StatsCard';
 import ProductCard from './components/ProductCard';
 import ProductModal from './components/ProductModal';
 import ActivityLogsPanel from './components/ActivityLogsPanel';
-import CategorySettingsModal from './components/CategorySettingsModal';
 import WhatsAppModal from './components/WhatsAppModal';
 import ConfirmSaleModal from './components/ConfirmSaleModal';
 import SalesReportPanel from './components/SalesReportPanel';
@@ -54,129 +54,135 @@ import FloatingToolsMenu from './components/FloatingToolsMenu';
 import ErrorBoundary from './components/ErrorBoundary';
 import ImportExcelModal from './components/ImportExcelModal';
 import ConfirmModal from './components/ConfirmModal';
+import AdminLoginView from './components/AdminLoginView';
+import VoidSaleModal from './components/VoidSaleModal';
+import StockAdjustmentModal from './components/StockAdjustmentModal';
+import TrashModal from './components/TrashModal';
 
-export default function App() {
-  // Navigation & View state
+function MainApp() {
+  const { user, isAuthorizedAdmin, operatorEmail, operatorName, logout, loading: authLoading } = useAuth();
+
+  // Navigation tab
   const [activeTab, setActiveTab] = useState<'inventory' | 'reports'>('inventory');
 
   // Real-time Firestore state
   const [products, setProducts] = useState<Product[]>([]);
   const [logs, setLogs] = useState<ActivityLog[]>([]);
   const [ventas, setVentas] = useState<Venta[]>([]);
-  const [categoryThresholds, setCategoryThresholds] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
 
   // Search, Filters & Sorting
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('');
   const [selectedBrand, setSelectedBrand] = useState('');
-  const [stockFilter, setStockFilter] = useState<'all' | 'low' | 'out_of_stock' | 'healthy'>('all');
+  const [stockFilter, setStockFilter] = useState<'all' | 'in_stock' | 'out_of_stock'>('all');
   const [sortBy, setSortBy] = useState<'name_asc' | 'name_desc' | 'stock_asc' | 'stock_desc' | 'price_desc' | 'price_asc'>('name_asc');
 
-  // UI Panels / Modals
+  // UI Modals
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
   const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
-  const [showNotifications, setShowNotifications] = useState(false);
+  const [isTrashModalOpen, setIsTrashModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
-  const [showLogsMobile, setShowLogsMobile] = useState(false);
 
-  // Confirm Sale modal states
+  // Action Modals State
   const [saleProduct, setSaleProduct] = useState<Product | null>(null);
   const [saleQuantity, setSaleQuantity] = useState(1);
-  const [saleModalOpen, setSaleModalOpen] = useState(false);
+  const [isSaleModalOpen, setIsSaleModalOpen] = useState(false);
 
-  // Deletion confirmation state
-  const [productToDelete, setProductToDelete] = useState<Product | null>(null);
-  const [isConfirmDeleteOpen, setIsConfirmDeleteOpen] = useState(false);
+  const [voidingVenta, setVoidingVenta] = useState<Venta | null>(null);
+  const [isVoidModalOpen, setIsVoidModalOpen] = useState(false);
 
-  // Live Real-Time Toast Alerts
-  const [toasts, setToasts] = useState<Array<{ id: string; message: string; productName: string; stock: number; threshold: number }>>([]);
-  const prevProductsRef = useRef<Record<string, number>>({});
+  const [adjustingProduct, setAdjustingProduct] = useState<Product | null>(null);
+  const [isAdjustModalOpen, setIsAdjustModalOpen] = useState(false);
 
-  const addToast = (productName: string, stock: number, threshold: number) => {
-    const id = Math.random().toString(36).substring(2, 9);
-    setToasts((prev) => [
-      ...prev,
-      { id, productName, stock, threshold, message: `⚠️ Bajo Stock: ¡"${productName}" cayó por debajo del límite (${stock}/${threshold} u)!` }
-    ]);
+  // Trash product confirmation
+  const [productToTrash, setProductToTrash] = useState<Product | null>(null);
+  const [isConfirmTrashOpen, setIsConfirmTrashOpen] = useState(false);
+
+  // Catalog initialization loading state & feedback
+  const [isSeeding, setIsSeeding] = useState(false);
+  const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+  const hasAutoSeededRef = useRef(false);
+
+  const showToast = (type: 'success' | 'error' | 'info', text: string) => {
+    setToastMessage({ type, text });
     setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 6000);
+      setToastMessage((prev) => (prev?.text === text ? null : prev));
+    }, 5000);
   };
 
-  const removeToast = (id: string) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
+  const handleSeedCatalog = async () => {
+    if (isSeeding) return;
+    try {
+      setIsSeeding(true);
+      const res = await seedOfficialCatalog(operatorEmail, operatorName);
+      showToast('success', `¡Catálogo oficial cargado con éxito! Se cargaron/actualizaron ${res.created + res.updated} productos.`);
+    } catch (err: any) {
+      console.error('Error al inicializar catálogo:', err);
+      showToast('error', 'Error al cargar el catálogo oficial: ' + (err?.message || 'Verifica los permisos de conexión.'));
+    } finally {
+      setIsSeeding(false);
+    }
   };
 
-  // Load products, logs, sales, and category thresholds in real-time
+  // Load products, logs, and sales in real-time ONLY once authenticated
   useEffect(() => {
+    if (authLoading) return;
+    if (!isAuthorizedAdmin) {
+      setProducts([]);
+      setLogs([]);
+      setVentas([]);
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     
-    // Subscribe to products (seeds demo products automatically if Firestore is empty)
     const unsubscribeProducts = subscribeToProducts((loadedProducts) => {
       setProducts(loadedProducts);
       setLoading(false);
     });
 
-    // Subscribe to logs
     const unsubscribeLogs = subscribeToActivityLogs((loadedLogs) => {
       setLogs(loadedLogs);
-    }, 45); // Load up to 45 logs
+    }, 50);
 
-    // Subscribe to sales (ventas)
     const unsubscribeVentas = subscribeToVentas((loadedVentas) => {
       setVentas(loadedVentas);
-    });
-
-    // Subscribe to category thresholds alerts
-    const unsubscribeCategoryThresholds = subscribeToCategoryThresholds((loadedRules) => {
-      setCategoryThresholds(loadedRules);
     });
 
     return () => {
       unsubscribeProducts();
       unsubscribeLogs();
       unsubscribeVentas();
-      unsubscribeCategoryThresholds();
     };
-  }, []);
+  }, [authLoading, isAuthorizedAdmin]);
 
-  // Track stock level transitions to trigger notifications on action triggers
+  // If catalog is empty upon admin login, automatically seed official products once
   useEffect(() => {
-    if (products.length === 0 || loading) return;
+    if (!loading && isAuthorizedAdmin && products.length === 0 && !hasAutoSeededRef.current && !isSeeding) {
+      hasAutoSeededRef.current = true;
+      handleSeedCatalog();
+    }
+  }, [loading, isAuthorizedAdmin, products.length, isSeeding]);
 
-    const hasPreviousData = Object.keys(prevProductsRef.current).length > 0;
-    const currentStocks: Record<string, number> = {};
+  // Split active and trash products
+  const activeProducts = useMemo(() => {
+    return products.filter((p) => !p.isDeleted);
+  }, [products]);
 
-    products.forEach((p) => {
-      const threshold = p.useCategoryThreshold ? (categoryThresholds[p.category] ?? 5) : p.minStock;
-      const prevStock = prevProductsRef.current[p.id];
-      const wasAbove = prevStock === undefined || prevStock > threshold;
-      const isBelow = p.stock <= threshold;
+  const deletedProducts = useMemo(() => {
+    return products.filter((p) => p.isDeleted);
+  }, [products]);
 
-      if (hasPreviousData && prevStock !== undefined && p.stock < prevStock && wasAbove && isBelow) {
-        addToast(p.name, p.stock, threshold);
-      }
-      currentStocks[p.id] = p.stock;
-    });
-
-    prevProductsRef.current = currentStocks;
-  }, [products, categoryThresholds, loading]);
-
-  // Compute stats metrics dynamically
+  // Compute stats metrics dynamically (active products only)
   const stats = useMemo(() => {
-    const totalProducts = products.length;
-    const totalUnits = products.reduce((sum, p) => sum + Math.max(0, p.stock), 0);
-    const totalCostValue = products.reduce((sum, p) => sum + (Math.max(0, p.stock) * p.costPrice), 0);
-    const totalSellingValue = products.reduce((sum, p) => sum + (Math.max(0, p.stock) * p.sellingPrice), 0);
+    const totalProducts = activeProducts.length;
+    const totalUnits = activeProducts.reduce((sum, p) => sum + Math.max(0, p.stock), 0);
+    const totalCostValue = activeProducts.reduce((sum, p) => sum + (Math.max(0, p.stock) * p.costPrice), 0);
+    const totalSellingValue = activeProducts.reduce((sum, p) => sum + (Math.max(0, p.stock) * p.sellingPrice), 0);
     const estimatedProfit = totalSellingValue - totalCostValue;
-    
-    const lowStockCount = products.filter((p) => {
-      const threshold = p.useCategoryThreshold ? (categoryThresholds[p.category] ?? 5) : p.minStock;
-      return p.stock <= threshold;
-    }).length;
 
     return {
       totalProducts,
@@ -184,39 +190,30 @@ export default function App() {
       totalCostValue,
       totalSellingValue,
       estimatedProfit,
-      lowStockCount,
     };
-  }, [products, categoryThresholds]);
+  }, [activeProducts]);
 
-  // Extract unique categories and brands for filter menus
+  // Unique categories and brands
   const categories = useMemo(() => {
     const set = new Set<string>();
-    products.forEach((p) => {
+    activeProducts.forEach((p) => {
       if (p.category) set.add(p.category);
     });
     return Array.from(set).sort();
-  }, [products]);
-
-  const lowStockProducts = useMemo(() => {
-    return products.filter((p) => {
-      const threshold = p.useCategoryThreshold ? (categoryThresholds[p.category] ?? 5) : p.minStock;
-      return p.stock <= threshold;
-    });
-  }, [products, categoryThresholds]);
+  }, [activeProducts]);
 
   const brands = useMemo(() => {
     const set = new Set<string>();
-    products.forEach((p) => {
+    activeProducts.forEach((p) => {
       if (p.brand) set.add(p.brand);
     });
     return Array.from(set).sort();
-  }, [products]);
+  }, [activeProducts]);
 
-  // Filter & Sort Logic
+  // Filter & Sort Logic for Admin Inventory
   const filteredProducts = useMemo(() => {
-    let result = [...products];
+    let result = [...activeProducts];
 
-    // Search query constraint
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       result = result.filter(
@@ -229,32 +226,20 @@ export default function App() {
       );
     }
 
-    // Category filter
     if (selectedCategory) {
       result = result.filter((p) => p.category === selectedCategory);
     }
 
-    // Brand filter
     if (selectedBrand) {
       result = result.filter((p) => p.brand === selectedBrand);
     }
 
-    // Stock levels filter
-    if (stockFilter === 'low') {
-      result = result.filter((p) => {
-        const threshold = p.useCategoryThreshold ? (categoryThresholds[p.category] ?? 5) : p.minStock;
-        return p.stock > 0 && p.stock <= threshold;
-      });
+    if (stockFilter === 'in_stock') {
+      result = result.filter((p) => p.stock > 0);
     } else if (stockFilter === 'out_of_stock') {
       result = result.filter((p) => p.stock === 0);
-    } else if (stockFilter === 'healthy') {
-      result = result.filter((p) => {
-        const threshold = p.useCategoryThreshold ? (categoryThresholds[p.category] ?? 5) : p.minStock;
-        return p.stock > threshold;
-      });
     }
 
-    // Sort order
     result.sort((a, b) => {
       const nameA = String(a?.name || '');
       const nameB = String(b?.name || '');
@@ -276,31 +261,9 @@ export default function App() {
     });
 
     return result;
-  }, [products, searchQuery, selectedCategory, selectedBrand, stockFilter, sortBy]);
+  }, [activeProducts, searchQuery, selectedCategory, selectedBrand, stockFilter, sortBy]);
 
-  // Smart suggestions / alerts based on current state
-  const smartAlerts = useMemo(() => {
-    const alerts: string[] = [];
-    const critical = products.filter((p) => p.stock === 0);
-    if (critical.length > 0) {
-      alerts.push(
-        `Atención: Tienes ${critical.length} productos sin existencias en almacén. Se sugiere reabastecer de inmediato.`
-      );
-    }
-    const highMargin = products.filter((p) => {
-      const profit = p.sellingPrice - p.costPrice;
-      const margin = p.sellingPrice > 0 ? (profit / p.sellingPrice) * 100 : 0;
-      return margin >= 50 && p.stock > 0;
-    });
-    if (highMargin.length > 0) {
-      alerts.push(
-        `Oportunidad: El producto "${highMargin[0].name}" tiene un margen superior al 50%. Promociona este artículo para maximizar ingresos.`
-      );
-    }
-    return alerts;
-  }, [products]);
-
-  // Modal Handlers
+  // Product CRUD handlers
   const handleOpenAddModal = () => {
     setEditingProduct(null);
     setIsModalOpen(true);
@@ -313,746 +276,654 @@ export default function App() {
 
   const handleSaveProduct = async (productInput: ProductInput) => {
     if (editingProduct) {
-      // Editing
-      await updateProduct(editingProduct.id, {
-        ...productInput,
-        previousState: editingProduct // Passes current state to calculate the adjustment logs correctly
-      });
+      await updateProduct(
+        editingProduct.id, 
+        { ...productInput, previousState: editingProduct },
+        operatorEmail,
+        operatorName
+      );
     } else {
-      // Create new
-      await addProduct(productInput);
+      await addProduct(productInput, operatorEmail, operatorName);
     }
   };
 
-  const handleDeleteProduct = (product: Product) => {
-    setProductToDelete(product);
-    setIsConfirmDeleteOpen(true);
+  // Soft Delete / Move to Trash Handlers
+  const handleRequestTrashProduct = (product: Product) => {
+    setProductToTrash(product);
+    setIsConfirmTrashOpen(true);
   };
 
-  const handleExecuteDeleteProduct = async () => {
-    if (productToDelete) {
-      await deleteProduct(productToDelete.id, productToDelete.name);
-      setProductToDelete(null);
+  const handleExecuteMoveToTrash = async () => {
+    if (productToTrash) {
+      await moveToTrashProduct(productToTrash.id, productToTrash.name, operatorEmail, operatorName);
+      setProductToTrash(null);
     }
   };
 
-  const handleQuickAdjust = async (product: Product, amount: number, type: 'sale' | 'restock') => {
-    if (type === 'sale') {
-      setSaleProduct(product);
-      setSaleQuantity(Math.abs(amount));
-      setSaleModalOpen(true);
-    } else {
-      await adjustStock(product, amount, type);
-    }
+  const handleRestoreProduct = async (product: Product) => {
+    await restoreProductFromTrash(product.id, product.name, operatorEmail, operatorName);
   };
 
+  const handlePermanentDelete = async (product: Product) => {
+    await permanentDeleteProduct(product.id, product.name, operatorEmail, operatorName);
+  };
+
+  const handleEmptyTrashAll = async () => {
+    await emptyTrash(operatorEmail, operatorName);
+  };
+
+  // Stock Adjustment & Restock Handlers
+  const handleTriggerQuickSale = (product: Product) => {
+    setSaleProduct(product);
+    setSaleQuantity(1);
+    setIsSaleModalOpen(true);
+  };
+
+  const handleTriggerQuickRestock = (product: Product) => {
+    setAdjustingProduct(product);
+    setIsAdjustModalOpen(true);
+  };
+
+  const handleExecuteStockAdjustment = async (
+    amount: number, 
+    type: 'restock' | 'adjustment', 
+    reason: string
+  ) => {
+    if (!adjustingProduct) return;
+    await adjustStockWithReason(
+      adjustingProduct,
+      amount,
+      type,
+      reason,
+      operatorEmail,
+      operatorName
+    );
+  };
+
+  // Atomic Sale Execution Handler
   const handleConfirmSale = async (
     paymentMethod: 'Efectivo' | 'Transferencia' | 'Crédito', 
     deviceModel: string, 
     debtorName?: string,
-    debtAmount?: number
+    debtAmount?: number,
+    confirmedQuantity?: number
   ) => {
     if (!saleProduct) return;
     
-    // 1. Descontar las unidades y registrar en la bitácora de actividad
-    const qty = saleQuantity;
-    await adjustStock(saleProduct, -qty, 'sale');
+    const qty = confirmedQuantity || saleQuantity;
+    const profitPerUnit = saleProduct.sellingPrice - saleProduct.costPrice;
+    const totalProfit = profitPerUnit * qty;
 
-    // 2. Registrar en la colección "ventas"
-    const profit = (saleProduct.sellingPrice - saleProduct.costPrice) * qty;
-    await addVenta({
+    await executeSaleTransaction({
       productId: saleProduct.id,
       productName: saleProduct.name,
       brand: saleProduct.brand,
       sellingPrice: saleProduct.sellingPrice,
       costPrice: saleProduct.costPrice,
       quantity: qty,
-      profit: profit,
+      profit: totalProfit,
       paymentMethod,
-      timestamp: Date.now(),
       deviceModel,
-      debtorName: debtorName || '',
+      debtorName,
       isPaid: paymentMethod !== 'Crédito',
-      debtAmount: debtAmount !== undefined ? debtAmount : (saleProduct.sellingPrice * qty)
+      debtAmount,
+      operatorEmail,
+      operatorName
     });
+
+    setSaleProduct(null);
   };
 
-  const handleUpdateVentaRecord = async (id: string, updates: Partial<Venta>) => {
-    await updateVenta(id, updates);
+  // Void Sale Handler (Replaces Delete Sale)
+  const handleOpenVoidModal = (venta: Venta) => {
+    setVoidingVenta(venta);
+    setIsVoidModalOpen(true);
   };
 
-  const handleDeleteVentaRecord = async (id: string) => {
-    await deleteVenta(id);
+  const handleExecuteVoidSale = async (reason: string) => {
+    if (!voidingVenta) return;
+    await voidSaleTransaction(voidingVenta.id, reason, operatorEmail, operatorName);
+    setVoidingVenta(null);
   };
 
-  const handleClearVentasHistory = async () => {
-    await clearAllVentas();
+  // Full Backup JSON download
+  const handleDownloadBackup = async () => {
+    try {
+      const jsonStr = await exportAllDataAsJson();
+      const blob = new Blob([jsonStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `backup_inventario_${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error(err);
+      showToast('error', 'Error al generar el respaldo de datos.');
+    }
   };
 
-  // Export current inventory state to CSV
-  const handleExportCSV = () => {
-    // CSV Header representation
-    const headers = ['SKU', 'Nombre', 'Marca', 'Categoria', 'Stock', 'Mínimo Alerta', 'Precio Costo', 'Precio Venta', 'Ganancia Unitaria', 'Notas'];
-    
-    const rows = filteredProducts.map((p) => [
-      p.sku,
-      `"${p.name.replace(/"/g, '""')}"`,
-      p.brand,
-      p.category,
-      p.stock,
-      p.minStock,
-      p.costPrice,
-      p.sellingPrice,
-      p.sellingPrice - p.costPrice,
-      `"${(p.notes || '').replace(/"/g, '""')}"`,
-    ]);
+  // Guard: If user is not authorized, render the Admin Login View
+  if (!isAuthorizedAdmin) {
+    return (
+      <ErrorBoundary>
+        <AdminLoginView />
+      </ErrorBoundary>
+    );
+  }
 
-    const csvContent = '\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    
-    const link = document.createElement('a');
-    link.setAttribute('href', url);
-    link.setAttribute('download', `inventario_reporte_${new Date().toISOString().slice(0, 10)}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
+  // RENDER: Full Dark Admin Panel
   return (
     <ErrorBoundary>
-      <div className="min-h-screen bg-[#070b19] bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-slate-900 via-[#070b19] to-slate-950 text-slate-100 font-sans relative overflow-x-hidden selection:bg-indigo-500/30 selection:text-white">
-        {/* Dynamic graphic glass elements and mesh glow filters */}
-        <div className="absolute top-1/4 left-1/3 w-[350px] lg:w-[450px] h-[350px] lg:h-[450px] rounded-full bg-indigo-500/10 blur-[130px] pointer-events-none" />
-        <div className="absolute top-1/2 right-1/4 w-[300px] lg:w-[400px] h-[300px] lg:h-[400px] rounded-full bg-blue-500/10 blur-[120px] pointer-events-none" />
-        <div className="absolute bottom-1/4 left-10 w-[250px] lg:w-[350px] h-[250px] lg:h-[350px] rounded-full bg-emerald-500/5 blur-[100px] pointer-events-none" />
+      <div className="min-h-screen bg-slate-950 text-slate-100 font-sans selection:bg-indigo-500/30 selection:text-indigo-200 pb-20 relative">
+        {/* Subtle background glow */}
+        <div className="fixed inset-0 bg-[radial-gradient(ellipse_80%_80%_at_50%_-20%,rgba(99,102,241,0.12),rgba(255,255,255,0))] pointer-events-none" />
 
-        {/* Top Navigation Banner */}
-        <nav className="bg-white/5 border-b border-white/10 sticky top-0 z-40 backdrop-blur-md">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex justify-between h-16">
-              <div className="flex items-center gap-3">
-                <div className="p-2.5 bg-indigo-600 text-white rounded-xl shadow-lg shadow-indigo-500/10">
-                  <Package className="w-5 h-5 lg:w-6 lg:h-6" />
+        {/* Top Header bar */}
+        <header className="sticky top-0 z-30 bg-slate-900/80 backdrop-blur-xl border-b border-white/10">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
+            {/* Brand Zone */}
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-indigo-500 flex items-center justify-center text-white shadow-lg shadow-indigo-600/20">
+                <ShieldCheck className="w-5 h-5 text-emerald-400" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-white text-sm sm:text-base tracking-tight">
+                    Panel de Gestión
+                  </span>
+                  <span className="hidden sm:inline-block text-[11px] font-semibold text-emerald-400 bg-emerald-500/15 border border-emerald-500/20 px-2 py-0.5 rounded-lg">
+                    Admin Seguro
+                  </span>
                 </div>
-                <div>
-                  <h1 className="text-sm xs:text-base sm:text-lg font-extrabold text-white tracking-tight leading-tight">
-                    Gestor de Inventario
-                  </h1>
-                  <p className="text-[9px] sm:text-[10px] text-slate-400 font-semibold tracking-wide mt-0.5">
-                    <span className="xs:hidden">Control de existencias y reportes</span>
-                    <span className="hidden xs:inline">Control de existencias y reportes en tiempo real</span>
-                  </p>
+                <div className="flex items-center gap-1.5 text-xs text-slate-400">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  <span>Operador: <strong className="text-white font-medium">{operatorName}</strong></span>
                 </div>
               </div>
+            </div>
 
-              {/* Desktop Navigation Links (Middle of NavBar) */}
-              <div className="hidden md:flex items-center gap-2.5 border-l border-white/10 pl-6 h-10 my-auto">
+            {/* Actions Zone */}
+            <div className="flex items-center gap-2">
+              {activeProducts.length < 129 && (
                 <button
-                  onClick={() => setActiveTab('inventory')}
-                  className={`px-4 py-2 rounded-xl font-bold text-xs transition-all flex items-center gap-1.5 cursor-pointer ${
-                    activeTab === 'inventory'
-                      ? 'bg-indigo-600/15 text-indigo-300 border border-indigo-500/30'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-white/5 border border-transparent'
-                  }`}
+                  type="button"
+                  onClick={handleSeedCatalog}
+                  disabled={isSeeding}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600/30 hover:bg-indigo-600/50 border border-indigo-500/40 text-indigo-200 rounded-xl text-xs font-semibold transition-all cursor-pointer disabled:opacity-50"
+                  title="Cargar o restaurar los 129 productos del catálogo oficial"
                 >
-                  <Package className="w-4 h-4" />
-                  <span>Inventario</span>
+                  <Layers className="w-3.5 h-3.5 text-indigo-400" />
+                  <span className="hidden md:inline">Cargar Catálogo ({activeProducts.length}/129)</span>
+                  <span className="md:hidden">129 Vapes</span>
                 </button>
-                <button
-                  onClick={() => setActiveTab('reports')}
-                  className={`px-4 py-2 rounded-xl font-bold text-xs transition-all flex items-center gap-1.5 cursor-pointer ${
-                    activeTab === 'reports'
-                      ? 'bg-indigo-600/15 text-indigo-300 border border-indigo-500/30'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-white/5 border border-transparent'
-                  }`}
-                >
-                  <TrendingUp className="w-4 h-4" />
-                  <span>Reportes & Ventas</span>
-                </button>
-              </div>
+              )}
 
-              <div className="flex items-center gap-2">
-                {/* Category thresholds configuration trigger button */}
-                <button
-                  onClick={() => setIsCategoryModalOpen(true)}
-                  className="hidden sm:flex items-center gap-2 p-2.5 text-slate-300 hover:text-white bg-white/5 hover:bg-white/15 border border-white/10 rounded-xl transition-all cursor-pointer"
-                  title="Configurar Alertas por Categoría"
-                >
-                  <Sliders className="w-4 h-4" />
-                  <span className="text-xs font-bold font-sans">Umbrales</span>
-                </button>
+              <button
+                type="button"
+                onClick={() => setIsTrashModalOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 rounded-xl text-xs font-medium transition-colors relative cursor-pointer"
+                title="Abrir papelera de reciclaje"
+              >
+                <Trash2 className="w-3.5 h-3.5 text-slate-400" />
+                <span className="hidden sm:inline">Papelera</span>
+                {deletedProducts.length > 0 && (
+                  <span className="px-1.5 py-0.2 bg-rose-600 text-white rounded-full text-[10px] font-bold">
+                    {deletedProducts.length}
+                  </span>
+                )}
+              </button>
 
-                {/* Notification Center Popover */}
-                <div className="relative">
-                  <button
-                    onClick={() => setShowNotifications(!showNotifications)}
-                    className={`p-2.5 rounded-xl border transition-all cursor-pointer relative ${
-                      showNotifications
-                        ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg shadow-indigo-500/10'
-                        : 'text-slate-300 hover:text-white bg-white/5 hover:bg-white/15 border-white/10'
-                    }`}
-                    title="Notificaciones de stock"
-                  >
-                    <Bell className="w-4.5 h-4.5" />
-                    {stats.lowStockCount > 0 && (
-                      <span className="absolute -top-1 -right-1 w-5 h-5 bg-rose-500 border-2 border-[#090e21] rounded-full text-[10px] font-extrabold text-white flex items-center justify-center animate-pulse">
-                        {stats.lowStockCount}
-                      </span>
-                    )}
-                  </button>
+              <button
+                type="button"
+                onClick={handleDownloadBackup}
+                className="hidden lg:inline-flex items-center gap-1.5 px-3 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 rounded-xl text-xs font-medium transition-colors cursor-pointer"
+                title="Descargar copia de seguridad completa en JSON"
+              >
+                <Download className="w-3.5 h-3.5 text-slate-400" />
+                <span>Respaldo JSON</span>
+              </button>
 
-                  {/* Notifications dropdown list */}
-                  <AnimatePresence>
-                    {showNotifications && (
-                      <>
-                        {/* Clicking outside closes the dropdown list */}
-                        <div className="fixed inset-0 z-40" onClick={() => setShowNotifications(false)} />
-                        <motion.div
-                          initial={{ opacity: 0, scale: 0.95, y: 10 }}
-                          animate={{ opacity: 1, scale: 1, y: 0 }}
-                          exit={{ opacity: 0, scale: 0.95, y: 10 }}
-                          className="absolute right-0 mt-2.5 w-80 sm:w-96 bg-slate-900 border border-white/10 rounded-2xl shadow-2xl overflow-hidden z-50 text-slate-100 backdrop-blur-xl"
-                        >
-                          <div className="px-4.5 py-3 border-b border-white/10 flex justify-between items-center bg-white/5">
-                            <div>
-                              <span className="text-[10px] text-indigo-300 font-extrabold uppercase tracking-widest font-mono">Alertas Críticas</span>
-                              <h4 className="text-xs sm:text-sm font-bold leading-tight">Artículos con Bajo Stock</h4>
-                            </div>
-                            <span className="px-2 py-0.5 bg-rose-500/25 text-rose-300 border border-rose-500/30 rounded-md text-[10px] font-bold font-mono">
-                              {stats.lowStockCount} alertas
-                            </span>
-                          </div>
-
-                          <div className="max-h-72 overflow-y-auto divide-y divide-white/5">
-                            {lowStockProducts.length === 0 ? (
-                              <div className="p-8 text-center">
-                                <span className="text-2xl">🎉</span>
-                                <p className="text-xs text-slate-400 font-semibold mt-2">¡Todo al día! No hay artículos bajo el umbral.</p>
-                              </div>
-                            ) : (
-                              lowStockProducts.map((p) => {
-                                const threshold = p.useCategoryThreshold ? (categoryThresholds[p.category] ?? 5) : p.minStock;
-                                return (
-                                  <div key={p.id} className="p-3.5 hover:bg-white/5 transition-colors flex justify-between items-center gap-2">
-                                    <div className="min-w-0 flex-1">
-                                      <h5 className="text-xs font-bold text-slate-200 truncate" title={p.name}>
-                                        {p.name}
-                                      </h5>
-                                      <div className="flex items-center gap-1.5 text-[10px] text-slate-400 font-medium mt-0.5">
-                                        <span className="bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded font-bold font-mono uppercase text-[9px] truncate max-w-[100px]">{p.category}</span>
-                                        <span>Stock: <strong className={p.stock === 0 ? "text-rose-400" : "text-amber-400 font-bold"}>{p.stock}</strong>/{threshold} u</span>
-                                      </div>
-                                    </div>
-                                    <div className="flex items-center gap-1.5 shrink-0">
-                                      <button
-                                        onClick={() => {
-                                          setSearchQuery(p.sku);
-                                          setShowNotifications(false);
-                                        }}
-                                        className="px-2.5 py-1.5 bg-white/5 hover:bg-white/15 border border-white/10 rounded-lg text-[10px] font-bold transition-all cursor-pointer"
-                                        title="Buscar este artículo"
-                                      >
-                                        Encontrar
-                                      </button>
-                                      <button
-                                        onClick={async () => {
-                                          await handleQuickAdjust(p, 10, 'restock');
-                                        }}
-                                        className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold rounded-lg transition-all cursor-pointer"
-                                        title="Agregar 10 unidades al stock"
-                                      >
-                                        +10 u
-                                      </button>
-                                    </div>
-                                  </div>
-                                );
-                              })
-                            )}
-                          </div>
-
-                          <div className="p-3 bg-white/5 border-t border-white/10 flex justify-between items-center text-[11px]">
-                            <span className="text-slate-400">¿Deseas cambiar límites?</span>
-                            <button
-                              onClick={() => {
-                                setIsCategoryModalOpen(true);
-                                setShowNotifications(false);
-                              }}
-                              className="text-indigo-400 hover:text-indigo-300 font-bold flex items-center gap-1 cursor-pointer animate-pulse"
-                            >
-                              <Sliders className="w-3.5 h-3.5" /> Configurar Umbrales
-                            </button>
-                          </div>
-                        </motion.div>
-                      </>
-                    )}
-                  </AnimatePresence>
-                </div>
-
-                <button
-                  onClick={handleOpenAddModal}
-                  className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2.5 rounded-xl text-xs sm:text-sm font-bold shadow-lg shadow-indigo-500/20 transition-all flex items-center gap-2 cursor-pointer"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span className="hidden xs:inline">Agregar Producto</span>
-                  <span className="xs:hidden">Agregar</span>
-                </button>
-
-                {/* Mobile sliders launcher */}
-                <button
-                  onClick={() => setIsCategoryModalOpen(true)}
-                  className="sm:hidden p-2.5 text-slate-300 hover:text-white bg-white/5 hover:bg-white/15 border border-white/10 rounded-xl transition-all cursor-pointer"
-                  title="Configurar Alertas por Categoría"
-                >
-                  <Sliders className="w-4 h-4" />
-                </button>
-
-                <button
-                  onClick={() => setShowLogsMobile(!showLogsMobile)}
-                  className="lg:hidden p-2.5 text-slate-300 hover:text-white bg-white/5 hover:bg-white/15 border border-white/10 rounded-xl transition-all cursor-pointer"
-                  title="Historial de logs"
-                >
-                  <History className="w-4 h-4 sm:w-5 sm:h-5" />
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={logout}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/25 hover:border-rose-500/40 text-rose-300 rounded-xl text-xs font-medium transition-colors cursor-pointer"
+                title="Cerrar sesión"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Salir</span>
+              </button>
             </div>
           </div>
-        </nav>
+        </header>
 
-        {/* Mobile Tab Bar Header */}
-        <div className="md:hidden sticky top-16 z-30 bg-slate-900/90 backdrop-blur-md border-b border-white/10 grid grid-cols-2 p-1.5 gap-1.5">
-          <button
-            onClick={() => setActiveTab('inventory')}
-            className={`py-3 rounded-xl font-bold text-xs text-center flex items-center justify-center gap-2 transition-all cursor-pointer ${
-              activeTab === 'inventory'
-                ? 'bg-indigo-600 text-white shadow-md'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Package className="w-4 h-4" />
-            <span>Inventario</span>
-          </button>
-          <button
-            onClick={() => setActiveTab('reports')}
-            className={`py-3 rounded-xl font-bold text-xs text-center flex items-center justify-center gap-2 transition-all cursor-pointer ${
-              activeTab === 'reports'
-                ? 'bg-indigo-600 text-white shadow-md'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <TrendingUp className="w-4 h-4" />
-            <span>Reportes & Ventas</span>
-          </button>
+        {/* Workspace Toolbar & Tabs */}
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 pt-5 pb-2 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+          {/* Segmented Tab Controls */}
+          <div className="flex p-1 bg-slate-900/80 border border-white/10 rounded-2xl text-xs font-medium w-full sm:w-auto">
+            <button
+              type="button"
+              onClick={() => setActiveTab('inventory')}
+              className={`flex-1 sm:flex-none px-4 py-2 rounded-xl transition-all cursor-pointer ${
+                activeTab === 'inventory'
+                  ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30 font-semibold'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              📦 Inventario ({activeProducts.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('reports')}
+              className={`flex-1 sm:flex-none px-4 py-2 rounded-xl transition-all cursor-pointer ${
+                activeTab === 'reports'
+                  ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30 font-semibold'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              📊 Ventas, Cobros & Reportes ({ventas.length})
+            </button>
+          </div>
+
+          {/* Quick Actions */}
+          <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+            <button
+              type="button"
+              onClick={() => setIsWhatsAppModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold transition-colors shadow-lg shadow-emerald-600/20 cursor-pointer"
+            >
+              <MessageSquare className="w-3.5 h-3.5" />
+              <span>Lista WhatsApp</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsImportModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 bg-white/10 hover:bg-white/15 border border-white/10 text-white rounded-xl text-xs font-semibold transition-colors cursor-pointer"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Importar Excel</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleOpenAddModal}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold transition-all shadow-lg shadow-indigo-600/25 cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Nuevo Producto</span>
+            </button>
+          </div>
         </div>
 
-        {/* Main Workspace Frame */}
-        <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6 relative z-10">
-          
-          {/* Swipe gestures to slide between Inventory and Reports */}
-          <motion.div
-            drag="x"
-            dragConstraints={{ left: 0, right: 0 }}
-            dragElastic={0.15}
-            onDragEnd={(e, info) => {
-              if (info.offset.x < -120 && activeTab === 'inventory') {
-                setActiveTab('reports');
-              } else if (info.offset.x > 120 && activeTab === 'reports') {
-                setActiveTab('inventory');
-              }
-            }}
-            className="w-full relative touch-pan-y"
-          >
-            {activeTab === 'inventory' ? (
-              <div className="space-y-6">
-                {/* Financial KPI Dashboard Bar */}
-                <div className="grid grid-cols-1 gap-4 max-w-sm">
-                  <StatsCard
-                    title="Valor del Inventario"
-                    value={`$${stats.totalSellingValue.toLocaleString('es-CL')}`}
-                    icon={<DollarSign className="w-5 h-5" />}
-                    colorClass="bg-blue-600"
-                    description={`Costo: $${stats.totalCostValue.toLocaleString('es-CL')}`}
-                    trend={{
-                      value: `Ganancia est: $${stats.estimatedProfit.toLocaleString('es-CL')}`,
-                      isPositive: stats.estimatedProfit >= 0,
-                    }}
-                  />
+        {/* Main Content Area */}
+        <main className="max-w-7xl mx-auto px-4 sm:px-6 pt-3 space-y-6">
+          {activeTab === 'inventory' ? (
+            <>
+              {/* Stats Overview Strip */}
+              <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+                <StatsCard
+                  title="Artículos Activos"
+                  value={stats.totalProducts}
+                  icon={<Package className="w-5 h-5 text-indigo-400" />}
+                  colorClass="bg-indigo-500/20 text-indigo-400 border border-indigo-500/30"
+                />
+                <StatsCard
+                  title="Unidades en Stock"
+                  value={stats.totalUnits}
+                  icon={<Package className="w-5 h-5 text-emerald-400" />}
+                  colorClass="bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                />
+                <StatsCard
+                  title="Valor en Costo"
+                  value={`$${stats.totalCostValue.toLocaleString('es-CL')}`}
+                  icon={<DollarSign className="w-5 h-5 text-slate-300" />}
+                  colorClass="bg-slate-800 text-slate-300 border border-white/10"
+                />
+                <StatsCard
+                  title="Valor Venta Total"
+                  value={`$${stats.totalSellingValue.toLocaleString('es-CL')}`}
+                  icon={<DollarSign className="w-5 h-5 text-amber-400" />}
+                  colorClass="bg-amber-500/20 text-amber-400 border border-amber-500/30"
+                />
+                <StatsCard
+                  title="Ganancia Estimada"
+                  value={`$${stats.estimatedProfit.toLocaleString('es-CL')}`}
+                  icon={<TrendingUp className="w-5 h-5 text-emerald-400" />}
+                  colorClass="bg-emerald-500/20 text-emerald-400 border border-emerald-500/30"
+                />
+              </div>
+
+              {/* Search, Filter & Sort Controls */}
+              <div className="bg-white/5 backdrop-blur-lg border border-white/10 rounded-2xl p-4 shadow-xl space-y-3">
+                <div className="flex flex-col md:flex-row gap-3">
+                  {/* Search */}
+                  <div className="relative flex-1">
+                    <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Buscar por nombre, SKU, marca o categoría..."
+                      className="w-full pl-9 pr-4 py-2 bg-slate-900/80 border border-white/10 rounded-xl text-xs sm:text-sm text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+
+                  {/* Brand Filter */}
+                  {brands.length > 0 && (
+                    <select
+                      value={selectedBrand}
+                      onChange={(e) => setSelectedBrand(e.target.value)}
+                      aria-label="Filtrar por marca"
+                      className="py-2 px-3 bg-slate-900/90 border border-white/10 rounded-xl text-xs text-slate-200 focus:outline-none"
+                    >
+                      <option value="">Todas las marcas</option>
+                      {brands.map((b) => (
+                        <option key={b} value={b}>
+                          {b}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+
+                  {/* Category Filter */}
+                  {categories.length > 0 && (
+                    <select
+                      value={selectedCategory}
+                      onChange={(e) => setSelectedCategory(e.target.value)}
+                      aria-label="Filtrar por categoría"
+                      className="py-2 px-3 bg-slate-900/90 border border-white/10 rounded-xl text-xs text-slate-200 focus:outline-none"
+                    >
+                      <option value="">Todas las categorías</option>
+                      {categories.map((c) => (
+                        <option key={c} value={c}>
+                          {c}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+
+                  {/* Stock Level Filter */}
+                  <select
+                    value={stockFilter}
+                    onChange={(e) => setStockFilter(e.target.value as any)}
+                    aria-label="Filtrar por stock"
+                    className="py-2 px-3 bg-slate-900/90 border border-white/10 rounded-xl text-xs text-slate-200 focus:outline-none"
+                  >
+                    <option value="all">Todo el stock</option>
+                    <option value="in_stock">Solo disponibles</option>
+                    <option value="out_of_stock">Solo agotados</option>
+                  </select>
+
+                  {/* Sorting */}
+                  <select
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value as any)}
+                    aria-label="Ordenar productos"
+                    className="py-2 px-3 bg-slate-900/90 border border-white/10 rounded-xl text-xs text-slate-200 focus:outline-none"
+                  >
+                    <option value="name_asc">Nombre: A - Z</option>
+                    <option value="name_desc">Nombre: Z - A</option>
+                    <option value="stock_desc">Mayor Stock</option>
+                    <option value="stock_asc">Menor Stock</option>
+                    <option value="price_desc">Mayor Precio</option>
+                    <option value="price_asc">Menor Precio</option>
+                  </select>
                 </div>
 
-                {/* Control Desk & Catalogue section */}
-                <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start">
-                  {/* Left grid - listings */}
-                  <div className="lg:col-span-3 space-y-6">
-                    {/* Search & Filters block */}
-                    <div className="bg-white/5 backdrop-blur-lg border border-white/10 p-5 rounded-2xl shadow-lg space-y-4">
-                      <div className="flex flex-col md:flex-row gap-3">
-                        <div className="relative flex-1">
-                          <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" />
-                          <input
-                            type="text"
-                            value={searchQuery}
-                            onChange={(e) => setSearchQuery(e.target.value)}
-                            placeholder="Buscar por descripción, marca, categoría o SKU..."
-                            className="w-full pl-10 pr-10 py-3 rounded-xl border border-white/10 bg-white/5 focus:bg-white/10 transition-all outline-none focus:ring-2 focus:ring-indigo-500/35 focus:border-indigo-400 text-xs sm:text-sm text-white placeholder-slate-400 font-medium"
-                          />
-                          {searchQuery && (
-                            <button
-                              onClick={() => setSearchQuery('')}
-                              className="absolute right-3.5 top-3 text-slate-400 hover:text-white p-1 rounded-full hover:bg-white/15 transition-colors cursor-pointer"
-                            >
-                              <X className="w-4 h-4" />
-                            </button>
-                          )}
+                <div className="flex items-center justify-between text-xs text-slate-400 pt-1">
+                  <span>
+                    Mostrando <strong className="text-white">{filteredProducts.length}</strong> de {activeProducts.length} productos activos
+                  </span>
+                  {(searchQuery || selectedBrand || selectedCategory || stockFilter !== 'all') && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSearchQuery('');
+                        setSelectedBrand('');
+                        setSelectedCategory('');
+                        setStockFilter('all');
+                      }}
+                      className="text-indigo-400 hover:text-indigo-300 hover:underline font-medium cursor-pointer"
+                    >
+                      Limpiar filtros
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* Products Grid & Sidebar Layout */}
+              <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+                {/* Main Grid (3 columns) */}
+                <div className="lg:col-span-3">
+                  {filteredProducts.length === 0 ? (
+                    activeProducts.length === 0 ? (
+                      <div className="py-14 px-6 text-center bg-white/5 rounded-2xl border border-white/10 shadow-xl max-w-xl mx-auto my-4">
+                        <div className="w-14 h-14 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center mx-auto mb-4 shadow-lg shadow-indigo-500/10">
+                          <Package className="w-7 h-7" />
                         </div>
-
-                        <div className="flex flex-wrap gap-2">
-                          <div className="relative">
-                            <select
-                              value={sortBy}
-                              onChange={(e) => setSortBy(e.target.value as any)}
-                              className="px-4 py-3 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl text-xs font-semibold text-slate-200 outline-none cursor-pointer focus:ring-2 focus:ring-indigo-500/10 appearance-none pr-8 transition-colors"
-                            >
-                              <option value="name_asc" className="bg-slate-900 text-white">A - Z (Nombre)</option>
-                              <option value="name_desc" className="bg-slate-900 text-white">Z - A (Nombre)</option>
-                              <option value="stock_desc" className="bg-slate-900 text-white">Mayor Stock</option>
-                              <option value="stock_asc" className="bg-slate-900 text-white">Menor Stock</option>
-                              <option value="price_desc" className="bg-slate-900 text-white">Mayor Precio Venta</option>
-                              <option value="price_asc" className="bg-slate-900 text-white">Menor Precio Venta</option>
-                            </select>
-                            <span className="absolute right-3.5 top-3.5 pointer-events-none text-slate-300 text-xs">▼</span>
-                          </div>
-
-                          <button
-                            onClick={() => setIsImportModalOpen(true)}
-                            className="flex items-center gap-2 bg-indigo-600/10 hover:bg-indigo-500 hover:text-white border border-indigo-500/20 hover:border-indigo-500/30 text-indigo-400 font-semibold px-4 py-3 rounded-xl text-xs transition-all cursor-pointer"
-                            title="Importar catálogo e inventario desde un archivo Excel o CSV"
-                          >
-                            <FileSpreadsheet className="w-4 h-4 text-indigo-400" />
-                            <span>Importar Excel</span>
-                          </button>
-
-                          <button
-                            onClick={handleExportCSV}
-                            className="flex items-center gap-2 bg-white/5 hover:bg-emerald-500/10 hover:text-emerald-300 border border-white/10 hover:border-emerald-500/20 text-slate-300 font-semibold px-4 py-3 rounded-xl text-xs transition-all cursor-pointer"
-                            title="Exportar inventario actual a un archivo CSV para Excel"
-                          >
-                            <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
-                            <span>Exportar Excel</span>
-                          </button>
-
-                          <button
-                            onClick={() => setIsWhatsAppModalOpen(true)}
-                            className="flex items-center gap-2 bg-emerald-600/10 hover:bg-emerald-500 hover:text-white border border-emerald-500/20 text-emerald-400 hover:border-emerald-500/30 font-semibold px-4 py-3 rounded-xl text-xs transition-all cursor-pointer"
-                            title="Generar catálogo en texto para WhatsApp"
-                          >
-                            <MessageSquare className="w-4 h-4 text-emerald-400" />
-                            <span>Catálogo WhatsApp</span>
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="pt-2 border-t border-white/10 flex flex-wrap gap-2 items-center text-xs">
-                        <span className="text-slate-400 font-bold uppercase tracking-wider text-[10px] flex items-center gap-1.5 shrink-0 mr-1 pt-[1px]">
-                          <SlidersHorizontal className="w-3.5 h-3.5" /> Filtrar:
-                        </span>
-
-                        <button
-                          onClick={() => setStockFilter('all')}
-                          className={`px-3 py-1.5 rounded-lg font-semibold transition-all cursor-pointer ${
-                            stockFilter === 'all'
-                              ? 'bg-white/15 text-white border border-white/20'
-                              : 'bg-white/5 hover:bg-white/10 text-slate-300 border border-white/5'
-                          }`}
-                        >
-                          Todos
-                        </button>
-                        <button
-                          onClick={() => setStockFilter('low')}
-                          className={`px-3 py-1.5 rounded-lg font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
-                            stockFilter === 'low'
-                              ? 'bg-amber-500/25 text-amber-200 border border-amber-500/40 font-bold'
-                              : 'bg-white/5 hover:bg-white/10 text-slate-300 border border-white/5'
-                          }`}
-                        >
-                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                          Bajo Stock
-                        </button>
-                        <button
-                          onClick={() => setStockFilter('out_of_stock')}
-                          className={`px-3 py-1.5 rounded-lg font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
-                            stockFilter === 'out_of_stock'
-                              ? 'bg-rose-500/25 text-rose-200 border border-rose-500/40 font-bold'
-                              : 'bg-white/5 hover:bg-white/10 text-slate-300 border border-white/5'
-                          }`}
-                        >
-                          <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
-                          Agotado
-                        </button>
-                        <button
-                          onClick={() => setStockFilter('healthy')}
-                          className={`px-3 py-1.5 rounded-lg font-semibold transition-all flex items-center gap-1.5 cursor-pointer ${
-                            stockFilter === 'healthy'
-                              ? 'bg-emerald-500/25 text-emerald-200 border border-emerald-500/40 font-bold'
-                              : 'bg-white/5 hover:bg-white/10 text-slate-300 border border-white/5'
-                          }`}
-                        >
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                          Stock Estable
-                        </button>
-
-                        <div className="h-5 w-px bg-white/10 mx-1 hidden sm:block" />
-
-                        <select
-                          value={selectedCategory}
-                          onChange={(e) => setSelectedCategory(e.target.value)}
-                          className="px-3 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-xs font-semibold text-slate-300 outline-none cursor-pointer transition-colors"
-                        >
-                          <option value="" className="bg-slate-900 text-slate-300">Categorías (Todas)</option>
-                          {categories.map((c) => (
-                            <option key={c} value={c} className="bg-slate-900 text-slate-100">
-                              {c}
-                            </option>
-                          ))}
-                        </select>
-
-                        <select
-                          value={selectedBrand}
-                          onChange={(e) => setSelectedBrand(e.target.value)}
-                          className="px-3 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg text-xs font-semibold text-slate-300 outline-none cursor-pointer transition-colors"
-                        >
-                          <option value="" className="bg-slate-900 text-slate-300">Marcas (Todas)</option>
-                          {brands.map((b) => (
-                            <option key={b} value={b} className="bg-slate-900 text-slate-100">
-                              {b}
-                            </option>
-                          ))}
-                        </select>
-
-                        {(selectedCategory || selectedBrand || stockFilter !== 'all' || searchQuery) && (
-                          <button
-                            onClick={() => {
-                              setSelectedCategory('');
-                              setSelectedBrand('');
-                              setStockFilter('all');
-                              setSearchQuery('');
-                            }}
-                            className="text-indigo-400 hover:text-indigo-300 font-bold ml-auto cursor-pointer"
-                          >
-                            Restaurar Filtros
-                          </button>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Products Grid rendering layout */}
-                    {loading ? (
-                      <div className="bg-white/5 backdrop-blur-lg border border-white/10 p-20 flex flex-col items-center justify-center space-y-4 rounded-2xl">
-                        <div className="w-10 h-10 border-4 border-indigo-500/20 border-t-indigo-400 rounded-full animate-spin" />
-                        <p className="text-xs sm:text-sm font-semibold text-slate-400">Conectando a base de datos Firestore...</p>
-                      </div>
-                    ) : filteredProducts.length === 0 ? (
-                      <div className="bg-white/5 border border-white/10 p-16 text-center rounded-2xl shadow-lg">
-                        <div className="w-16 h-16 bg-white/5 text-slate-400 border border-white/10 rounded-full flex items-center justify-center mx-auto mb-4">
-                          <Package className="w-8 h-8 stroke-1 text-slate-300" />
-                        </div>
-                        <h3 className="text-lg font-bold text-slate-200">No se encontraron productos</h3>
-                        <p className="text-slate-400 text-xs sm:text-sm max-w-sm mx-auto mt-1.5 leading-normal">
-                          No pudimos hallar coincidencias según los criterios o filtros establecidos.
+                        <h4 className="text-base font-bold text-white tracking-tight">Catálogo Oficial Listo para Cargar</h4>
+                        <p className="text-xs text-slate-300 mt-2 leading-relaxed">
+                          Tu inventario oficial tiene los <strong className="text-white">129 productos de vapes</strong> preparados (IGNITE, ELFBAR, LOST MARY, BC, etc.) con sus precios de venta y existencias.
                         </p>
+                        <div className="mt-6 flex flex-col sm:flex-row items-center justify-center gap-3">
+                          <button
+                            type="button"
+                            onClick={handleSeedCatalog}
+                            disabled={isSeeding}
+                            className="w-full sm:w-auto px-5 py-2.5 bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-indigo-600/30 flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                          >
+                            {isSeeding ? (
+                              <>
+                                <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                                <span>Cargando 129 productos...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Layers className="w-4 h-4" />
+                                <span>Cargar los 129 Productos Oficiales</span>
+                              </>
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleOpenAddModal}
+                            className="w-full sm:w-auto px-4 py-2.5 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
+                          >
+                            Crear Producto Manual
+                          </button>
+                        </div>
                       </div>
                     ) : (
-                      <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        layoutRoot
-                        className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4"
-                      >
-                        <AnimatePresence mode="popLayout">
-                          {filteredProducts.map((prod) => (
-                            <motion.div
-                              key={prod.id}
-                              layout
-                              initial={{ opacity: 0, scale: 0.95 }}
-                              animate={{ opacity: 1, scale: 1 }}
-                              exit={{ opacity: 0, scale: 0.95 }}
-                              transition={{ duration: 0.2 }}
-                            >
-                              <ProductCard
-                                product={prod}
-                                onEdit={handleOpenEditModal}
-                                onDelete={handleDeleteProduct}
-                                onQuickAdjust={handleQuickAdjust}
-                                categoryThresholds={categoryThresholds}
-                              />
-                            </motion.div>
-                          ))}
-                        </AnimatePresence>
-                      </motion.div>
-                    )}
-                  </div>
-
-                  {/* Sidebar logs */}
-                  <div className="hidden lg:block lg:col-span-1">
-                    <ActivityLogsPanel logs={logs} onClearLogs={clearAllActivityLogs} />
-                  </div>
+                      <div className="py-16 text-center bg-white/5 rounded-2xl border border-white/10 shadow-lg">
+                        <Package className="w-10 h-10 text-slate-500 mx-auto mb-2" />
+                        <h4 className="text-sm font-semibold text-white">No se encontraron productos coincidentes</h4>
+                        <p className="text-xs text-slate-400 mt-1">Prueba cambiando los filtros de búsqueda o categoría.</p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSearchQuery('');
+                            setSelectedBrand('');
+                            setSelectedCategory('');
+                            setStockFilter('all');
+                          }}
+                          className="mt-4 px-4 py-2 bg-white/10 hover:bg-white/15 text-white rounded-xl text-xs font-semibold transition-colors cursor-pointer"
+                        >
+                          Limpiar Filtros
+                        </button>
+                      </div>
+                    )
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+                      {filteredProducts.map((product) => (
+                        <ProductCard
+                          key={product.id}
+                          product={product}
+                          onEdit={handleOpenEditModal}
+                          onDelete={handleRequestTrashProduct}
+                          onQuickSale={handleTriggerQuickSale}
+                          onQuickRestock={handleTriggerQuickRestock}
+                          onCustomAdjust={(p) => {
+                            setAdjustingProduct(p);
+                            setIsAdjustModalOpen(true);
+                          }}
+                        />
+                      ))}
+                    </div>
+                  )}
                 </div>
 
-                {/* Desktop view tip overlay */}
-                <div className="text-center py-2 text-[10px] text-slate-500 font-mono flex items-center justify-center gap-1.5">
-                  <span className="bg-indigo-500/10 text-indigo-400 px-1.5 py-0.5 rounded uppercase font-bold text-[9px]">Gesto</span>
-                  <span>Desliza con el dedo hacia la izquierda en la lista o usa el nav superior para ver Reportes.</span>
+                {/* Sidebar Activity Logs (1 column on desktop) */}
+                <div className="lg:col-span-1 space-y-4">
+                  <ActivityLogsPanel
+                    logs={logs}
+                    onClearLogs={clearAllActivityLogs}
+                  />
                 </div>
               </div>
-            ) : (
-              <motion.div
-                initial={{ opacity: 0, y: 15 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="space-y-6"
-              >
-                <SalesReportPanel
-                  ventas={ventas}
-                  products={products}
-                  onDeleteVenta={handleDeleteVentaRecord}
-                  onClearAllVentas={handleClearVentasHistory}
-                  onUpdateVenta={handleUpdateVentaRecord}
-                />
-
-                {/* Mobile/Desktop back gesture tip */}
-                <div className="text-center py-2 text-[10px] text-slate-500 font-mono flex items-center justify-center gap-1.5">
-                  <span className="bg-indigo-500/10 text-indigo-400 px-1.5 py-0.5 rounded uppercase font-bold text-[9px]">Gesto</span>
-                  <span>Desliza con el dedo hacia la derecha para volver a tus productos.</span>
-                </div>
-              </motion.div>
-            )}
-          </motion.div>
+            </>
+          ) : (
+            /* Reports & Sales Tab */
+            <SalesReportPanel
+              ventas={ventas}
+              products={products}
+              onVoidVenta={handleOpenVoidModal}
+              onClearAllVentas={clearAllVentas}
+              onUpdateVenta={updateVenta}
+              currentOperatorName={operatorName}
+            />
+          )}
         </main>
 
-        {/* Drawer overlay logs for Mobile viewport */}
-        <AnimatePresence>
-          {showLogsMobile && (
-            <div className="fixed inset-0 z-50 overflow-hidden lg:hidden">
-              <div className="absolute inset-0 bg-slate-950/60 backdrop-blur-xs" onClick={() => setShowLogsMobile(false)} />
-              <div className="absolute inset-y-0 right-0 max-w-full flex pl-10">
-                <motion.div
-                  initial={{ x: '100%' }}
-                  animate={{ x: 0 }}
-                  exit={{ x: '100%' }}
-                  transition={{ type: 'spring', damping: 25, stiffness: 220 }}
-                  className="w-screen max-w-md bg-slate-900/95 backdrop-blur-xl border-l border-white/10 p-4 shadow-2xl flex flex-col h-full"
-                >
-                  <div className="flex items-center justify-between pb-3 border-b border-white/10 mb-3">
-                    <h3 className="font-bold text-white flex items-center gap-2">
-                      <History className="w-5 h-5 text-indigo-400" /> Historial de Actividad
-                    </h3>
-                    <button
-                      onClick={() => setShowLogsMobile(false)}
-                      className="p-1.5 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white transition-colors cursor-pointer"
-                    >
-                      <X className="w-5 h-5" />
-                    </button>
-                  </div>
-                  <div className="flex-1 overflow-y-auto">
-                    <ActivityLogsPanel logs={logs} onClearLogs={clearAllActivityLogs} />
-                  </div>
-                </motion.div>
-              </div>
-            </div>
-          )}
-        </AnimatePresence>
+        {/* Floating Tools Menu */}
+        <FloatingToolsMenu
+          products={activeProducts}
+          ventas={ventas}
+        />
 
-        {/* Create / Edit product modal dialog form */}
+        {/* MODALS */}
+
+        {/* Product Add/Edit Modal */}
         <ProductModal
           isOpen={isModalOpen}
           onClose={() => setIsModalOpen(false)}
           onSave={handleSaveProduct}
           product={editingProduct}
-          categoryThresholds={categoryThresholds}
           brands={brands}
         />
 
-        {/* Category Minimum thresholds warning rules edit form */}
-        <CategorySettingsModal
-          isOpen={isCategoryModalOpen}
-          onClose={() => setIsCategoryModalOpen(false)}
-          categories={categories}
-          categoryThresholds={categoryThresholds}
-        />
-
-        {/* Standard simple WhatsApp message share modal dialog */}
+        {/* WhatsApp Export Modal */}
         <WhatsAppModal
           isOpen={isWhatsAppModalOpen}
           onClose={() => setIsWhatsAppModalOpen(false)}
-          products={products}
+          products={activeProducts}
         />
 
-        {/* Master Excel import companion dialog */}
-        <ImportExcelModal
-          isOpen={isImportModalOpen}
-          onClose={() => setIsImportModalOpen(false)}
-          existingProducts={products}
-        />
-
-        {/* Elegant sale details submit form dialog */}
+        {/* Confirm Sale Modal (Atomic) */}
         <ConfirmSaleModal
-          isOpen={saleModalOpen}
+          isOpen={isSaleModalOpen}
           onClose={() => {
-            setSaleModalOpen(false);
+            setIsSaleModalOpen(false);
             setSaleProduct(null);
           }}
           product={saleProduct}
           quantity={saleQuantity}
+          operatorName={operatorName}
           onConfirm={handleConfirmSale}
         />
 
-        {/* Custom Confirmation Modal for Deleting Products */}
-        <ConfirmModal
-          isOpen={isConfirmDeleteOpen}
+        {/* Void Sale Modal (Atomic Void & Restock) */}
+        <VoidSaleModal
+          isOpen={isVoidModalOpen}
           onClose={() => {
-            setIsConfirmDeleteOpen(false);
-            setProductToDelete(null);
+            setIsVoidModalOpen(false);
+            setVoidingVenta(null);
           }}
-          onConfirm={handleExecuteDeleteProduct}
-          title="¿Eliminar producto?"
-          message={productToDelete ? `¿Estás seguro de que deseas eliminar permanentemente "${productToDelete.name}" (${productToDelete.brand})? Esta acción no se puede deshacer.` : ''}
-          confirmText="Sí, Eliminar"
-          cancelText="No, Cancelar"
-          type="danger"
+          venta={voidingVenta}
+          onConfirm={handleExecuteVoidSale}
+          operatorName={operatorName}
         />
 
-        {/* All-in-one Floating action messaging companion widget */}
-        <FloatingToolsMenu products={products} ventas={ventas} />
+        {/* Stock Adjustment & Merchandise Entry Modal */}
+        <StockAdjustmentModal
+          isOpen={isAdjustModalOpen}
+          onClose={() => {
+            setIsAdjustModalOpen(false);
+            setAdjustingProduct(null);
+          }}
+          product={adjustingProduct}
+          operatorName={operatorName}
+          onConfirm={handleExecuteStockAdjustment}
+        />
 
-        {/* Real-Time stock level boundary alerts toasts */}
-        <div className="fixed bottom-5 right-5 z-50 flex flex-col gap-2.5 max-w-sm w-full pointer-events-none text-slate-100" id="toasts-portal">
-          <AnimatePresence>
-            {toasts.map((t) => (
-              <motion.div
-                key={t.id}
-                initial={{ opacity: 0, scale: 0.9, y: 20, x: 20 }}
-                animate={{ opacity: 1, scale: 1, y: 0, x: 0 }}
-                exit={{ opacity: 0, scale: 0.95, y: -10 }}
-                className="pointer-events-auto bg-slate-900/95 backdrop-blur-md border border-amber-500/30 rounded-xl p-4 shadow-2xl flex items-start gap-3 relative overflow-hidden"
-                id={`toast-${t.id}`}
+        {/* Trash Recycle Bin Modal */}
+        <TrashModal
+          isOpen={isTrashModalOpen}
+          onClose={() => setIsTrashModalOpen(false)}
+          deletedProducts={deletedProducts}
+          onRestore={handleRestoreProduct}
+          onPermanentDelete={handlePermanentDelete}
+          onEmptyTrash={handleEmptyTrashAll}
+        />
+
+        {/* Import Excel Modal */}
+        <ImportExcelModal
+          isOpen={isImportModalOpen}
+          onClose={() => setIsImportModalOpen(false)}
+          existingProducts={activeProducts}
+        />
+
+        {/* Move to Trash Confirm Modal */}
+        <ConfirmModal
+          isOpen={isConfirmTrashOpen}
+          onClose={() => {
+            setIsConfirmTrashOpen(false);
+            setProductToTrash(null);
+          }}
+          onConfirm={handleExecuteMoveToTrash}
+          title="¿Mover producto a la papelera?"
+          message={
+            productToTrash
+              ? `El producto "${productToTrash.name}" será enviado a la papelera de reciclaje. Podrás restaurarlo en cualquier momento o vaciarlo definitivamente desde la papelera.`
+              : ''
+          }
+          confirmText="Mover a Papelera"
+          cancelText="Cancelar"
+          type="warning"
+        />
+
+        {/* Global In-App Toast Notification */}
+        {toastMessage && (
+          <div className="fixed bottom-6 right-6 z-50 max-w-md animate-fade-in">
+            <div className={`p-4 rounded-xl border shadow-xl flex items-center justify-between gap-3 ${
+              toastMessage.type === 'success'
+                ? 'bg-emerald-950/95 border-emerald-500/40 text-emerald-200 shadow-emerald-950/50'
+                : toastMessage.type === 'error'
+                ? 'bg-rose-950/95 border-rose-500/40 text-rose-200 shadow-rose-950/50'
+                : 'bg-indigo-950/95 border-indigo-500/40 text-indigo-200 shadow-indigo-950/50'
+            }`}>
+              <span className="text-xs sm:text-sm font-medium">{toastMessage.text}</span>
+              <button
+                type="button"
+                onClick={() => setToastMessage(null)}
+                className="text-slate-400 hover:text-white text-xs px-1.5 py-0.5 rounded cursor-pointer"
               >
-                <div className="absolute top-0 left-0 bottom-0 w-1 bg-amber-500" />
-                <div className="p-2 bg-amber-500/10 text-amber-400 rounded-lg ml-1 shrink-0">
-                  <AlertTriangle className="w-4 h-4 animate-bounce" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <h5 className="text-xs font-bold text-amber-300">¡Alerta de Inventario!</h5>
-                  <p className="text-[11px] text-slate-300 mt-1 leading-snug font-medium">{t.message}</p>
-                </div>
-                <button
-                  onClick={() => removeToast(t.id)}
-                  className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-white/10 transition-colors shrink-0 cursor-pointer"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </motion.div>
-            ))}
-          </AnimatePresence>
-        </div>
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </ErrorBoundary>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <MainApp />
+    </AuthProvider>
   );
 }

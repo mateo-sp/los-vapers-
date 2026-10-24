@@ -8,7 +8,6 @@ interface ProductModalProps {
   onClose: () => void;
   onSave: (product: ProductInput) => Promise<void>;
   product?: Product | null; // If editing
-  categoryThresholds?: Record<string, number>;
   brands?: string[];
 }
 

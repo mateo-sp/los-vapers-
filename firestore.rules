@@ -1,8 +1,39 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if true;
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAuthorizedAdmin() {
+      return isSignedIn() && (
+        request.auth.uid == '7veWlG9BEWgorpmf7sMAPJvMY3k2' ||
+        (request.auth.token.email != null && (
+          request.auth.token.email == 'djgamer802@gmail.com' ||
+          request.auth.token.email == 'supposimon@gmail.com'
+        ))
+      );
+    }
+
+    // Colección de Productos
+    match /productos/{productId} {
+      allow read, write: if isAuthorizedAdmin();
+    }
+
+    // Colección de Ventas y Deudas
+    match /ventas/{ventaId} {
+      allow read, write: if isAuthorizedAdmin();
+    }
+
+    // Colección de Bitácora de Auditoría
+    match /activityLogs/{logId} {
+      allow read, write: if isAuthorizedAdmin();
+    }
+
+    // Configuración de umbrales
+    match /categoryThresholds/{catId} {
+      allow read, write: if isAuthorizedAdmin();
     }
   }
 }

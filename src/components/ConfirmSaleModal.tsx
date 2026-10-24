@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, DollarSign, Smartphone, ShieldCheck, ShoppingCart, HelpCircle } from 'lucide-react';
+import { X, DollarSign, Smartphone, ShoppingCart, AlertCircle, UserCheck } from 'lucide-react';
 import { Product } from '../types';
 
 interface ConfirmSaleModalProps {
@@ -8,10 +8,16 @@ interface ConfirmSaleModalProps {
   onClose: () => void;
   product: Product | null;
   quantity: number;
-  onConfirm: (paymentMethod: 'Efectivo' | 'Transferencia' | 'Crédito', deviceModel: string, debtorName?: string, debtAmount?: number) => Promise<void>;
+  operatorName?: string;
+  onConfirm: (
+    paymentMethod: 'Efectivo' | 'Transferencia' | 'Crédito', 
+    deviceModel: string, 
+    debtorName?: string, 
+    debtAmount?: number,
+    confirmedQuantity?: number
+  ) => Promise<void>;
 }
 
-// Utility to auto-detect device model based on user agent
 function detectDeviceModel(): string {
   const ua = navigator.userAgent;
   if (/android/i.test(ua)) {
@@ -20,24 +26,14 @@ function detectDeviceModel(): string {
     if (modelMatch && modelMatch[1]) {
       return modelMatch[1].trim();
     }
-    return matches ? `Android (${matches[1]})` : "Android Device";
+    return matches ? `Android (${matches[1]})` : "Celular Android";
   }
-  if (/iPhone/i.test(ua)) {
-    return "iPhone";
-  }
-  if (/iPad/i.test(ua)) {
-    return "iPad";
-  }
-  if (/Macintosh/i.test(ua)) {
-    return "MacBook / iMac";
-  }
-  if (/Windows/i.test(ua)) {
-    return "Windows PC";
-  }
-  if (/Linux/i.test(ua)) {
-    return "Linux PC";
-  }
-  return "Celular Corporativo";
+  if (/iPhone/i.test(ua)) return "iPhone";
+  if (/iPad/i.test(ua)) return "iPad";
+  if (/Macintosh/i.test(ua)) return "MacBook / iMac";
+  if (/Windows/i.test(ua)) return "PC Windows";
+  if (/Linux/i.test(ua)) return "PC Linux";
+  return "Dispositivo Móvil";
 }
 
 export default function ConfirmSaleModal({
@@ -45,8 +41,10 @@ export default function ConfirmSaleModal({
   onClose,
   product,
   quantity = 1,
+  operatorName = 'Administrador',
   onConfirm,
 }: ConfirmSaleModalProps) {
+  const [saleQty, setSaleQty] = useState(quantity);
   const [paymentMethod, setPaymentMethod] = useState<'Efectivo' | 'Transferencia' | 'Crédito'>('Efectivo');
   const [debtorName, setDebtorName] = useState('');
   const [debtAmountInput, setDebtAmountInput] = useState('');
@@ -56,252 +54,273 @@ export default function ConfirmSaleModal({
 
   useEffect(() => {
     if (isOpen && product) {
+      setSaleQty(quantity);
       setDeviceModel(detectDeviceModel());
       setPaymentMethod('Efectivo');
       setDebtorName('');
-      setDebtAmountInput((product.sellingPrice * quantity).toString());
+      setDebtAmountInput('');
       setError('');
     }
   }, [isOpen, product, quantity]);
 
-  if (!product) return null;
+  if (!isOpen || !product) return null;
 
-  const handleConfirm = async () => {
-    if (paymentMethod === 'Crédito') {
-      if (!debtorName.trim()) {
-        setError('Por favor, ingresa el nombre del cliente deudor.');
-        return;
-      }
-      const parsedDebt = parseFloat(debtAmountInput);
-      if (isNaN(parsedDebt) || parsedDebt < 0) {
-        setError('Por favor, ingresa un monto que debe válido (mayor o igual a 0).');
-        return;
-      }
+  const currentAvailableStock = product.stock;
+
+  const handleQtyChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = parseInt(e.target.value, 10);
+    if (isNaN(val) || val < 1) {
+      setSaleQty(1);
+    } else {
+      setSaleQty(val);
     }
+    setError('');
+  };
+
+  const handleStepQty = (delta: number) => {
+    const next = saleQty + delta;
+    if (next >= 1 && next <= currentAvailableStock) {
+      setSaleQty(next);
+      setError('');
+    }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+
+    // Pre-validate stock availability
+    if (saleQty > currentAvailableStock) {
+      setError(`Stock insuficiente. Solo quedan ${currentAvailableStock} unidad(es) disponibles.`);
+      return;
+    }
+
+    if (paymentMethod === 'Crédito' && !debtorName.trim()) {
+      setError('Por favor indica el nombre del cliente deudor.');
+      return;
+    }
+
+    let parsedDebtAmount: number | undefined = undefined;
+    if (paymentMethod === 'Crédito') {
+      const defaultTotal = product.sellingPrice * saleQty;
+      parsedDebtAmount = debtAmountInput.trim() !== '' ? Math.max(0, parseFloat(debtAmountInput) || 0) : defaultTotal;
+    }
+
     try {
       setIsSubmitting(true);
-      setError('');
-      
-      const parsedDebt = paymentMethod === 'Crédito' ? parseFloat(debtAmountInput) : undefined;
-      
-      await onConfirm(
-        paymentMethod, 
-        deviceModel || 'Celular Genérico', 
-        paymentMethod === 'Crédito' ? debtorName.trim() : undefined,
-        parsedDebt
-      );
+      await onConfirm(paymentMethod, deviceModel, debtorName.trim(), parsedDebtAmount, saleQty);
       onClose();
-    } catch (err) {
-      console.error(err);
-      setError('Ocurrió un error al registrar la venta.');
+    } catch (err: any) {
+      setError(err?.message || 'Error al registrar la venta. Inténtalo de nuevo.');
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const totalSale = product.sellingPrice * quantity;
-  const profit = (product.sellingPrice - product.costPrice) * quantity;
+  const totalSale = product.sellingPrice * saleQty;
+  const profit = (product.sellingPrice - product.costPrice) * saleQty;
 
   return (
     <AnimatePresence>
       {isOpen && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/75 backdrop-blur-md flex items-center justify-center p-4">
           <motion.div
             initial={{ opacity: 0, scale: 0.95, y: 15 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 15 }}
-            transition={{ type: 'spring', duration: 0.4 }}
-            className="bg-slate-900 border border-white/15 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl relative text-slate-100"
+            transition={{ duration: 0.18, ease: 'easeOut' }}
+            className="bg-slate-900 border border-white/15 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl text-slate-100"
             id="confirm-sale-dialog"
           >
-            {/* Background ambient glow */}
-            <div className="absolute top-[-30%] left-[-20%] w-[350px] h-[350px] rounded-full bg-emerald-500/10 blur-[100px] pointer-events-none" />
-
             {/* Header */}
-            <div className="bg-slate-800/40 px-6 py-4.5 flex items-center justify-between border-b border-white/10 relative z-10">
-              <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                <span className="p-2 bg-emerald-500/15 text-emerald-400 rounded-lg">
+            <div className="bg-slate-800/60 px-6 py-4 flex items-center justify-between border-b border-white/10">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2 bg-emerald-500/15 text-emerald-400 border border-emerald-500/25 rounded-xl">
                   <ShoppingCart className="w-5 h-5" />
-                </span>
-                Confirmar Venta
-              </h2>
+                </div>
+                <div>
+                  <h2 className="text-base font-semibold text-white">Registrar Venta</h2>
+                  <p className="text-xs text-slate-400">Transacción atómica de stock y caja</p>
+                </div>
+              </div>
               <button
                 type="button"
                 onClick={onClose}
-                className="text-slate-400 hover:text-white p-2 hover:bg-white/10 rounded-lg transition-colors cursor-pointer"
+                className="text-slate-400 hover:text-white p-1.5 rounded-lg transition-colors cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             {/* Contents */}
-            <div className="p-6 space-y-5 relative z-10">
+            <div className="p-6 space-y-4">
               {/* Product Info Summary */}
-              <div className="p-4.5 bg-white/5 rounded-xl border border-white/10 space-y-1.5">
-                <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider font-mono">Detalles de Venta</span>
-                <h3 className="text-base font-bold text-white leading-snug">{product.name}</h3>
-                <div className="flex items-center gap-2 text-xs text-slate-400 mt-1">
-                  <span>Marca: <strong className="text-slate-200">{product.brand}</strong></span>
-                  <span className="h-3 w-px bg-white/10" />
-                  <span>Cant: <strong className="text-slate-200">{quantity} u</strong></span>
+              <div className="bg-slate-950/60 border border-white/10 rounded-xl p-3.5 space-y-2 text-xs">
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-400">Producto:</span>
+                  <span className="font-semibold text-white text-right line-clamp-1">{product.name}</span>
                 </div>
-                
-                <div className="grid grid-cols-2 gap-4 pt-3.5 border-t border-white/5 mt-3">
-                  <div>
-                    <span className="text-[10px] text-slate-400 uppercase block tracking-wider font-semibold">Total a Cobrar</span>
-                    <span className="text-lg font-black text-white font-mono">${totalSale.toLocaleString('es-CL')}</span>
-                  </div>
-                  <div>
-                    <span className="text-[10px] text-slate-400 uppercase block tracking-wider font-semibold">Ganancia Neta</span>
-                    <span className="text-lg font-bold text-emerald-400 font-mono">${profit.toLocaleString('es-CL')}</span>
-                  </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-400">Marca:</span>
+                  <span className="text-slate-200">{product.brand || 'General'}</span>
                 </div>
-              </div>
-
-              {/* Payment Method Selector (Efectivo vs. Transferencia vs. Crédito) */}
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-slate-400 uppercase font-mono tracking-wider flex items-center gap-1.5">
-                  <DollarSign className="w-3.5 h-3.5 text-emerald-400" /> Método de Pago <span className="text-rose-400">*</span>
-                </label>
-                <div className="grid grid-cols-3 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setPaymentMethod('Efectivo')}
-                    className={`px-2 py-3 rounded-xl border transition-all cursor-pointer font-bold text-xs flex flex-col items-center justify-center gap-1.5 ${
-                      paymentMethod === 'Efectivo'
-                        ? 'bg-emerald-600/15 border-emerald-500 text-emerald-300 shadow-lg shadow-emerald-500/5'
-                        : 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-400'
-                    }`}
-                  >
-                    <span className="text-lg">💵</span>
-                    <span>Efectivo</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setPaymentMethod('Transferencia')}
-                    className={`px-2 py-3 rounded-xl border transition-all cursor-pointer font-bold text-xs flex flex-col items-center justify-center gap-1.5 ${
-                      paymentMethod === 'Transferencia'
-                        ? 'bg-indigo-600/15 border-indigo-500 text-indigo-300 shadow-lg shadow-indigo-500/5'
-                        : 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-400'
-                    }`}
-                  >
-                    <span className="text-lg">🏦</span>
-                    <span>Transf.</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setPaymentMethod('Crédito')}
-                    className={`px-2 py-3 rounded-xl border transition-all cursor-pointer font-bold text-xs flex flex-col items-center justify-center gap-1.5 ${
-                      paymentMethod === 'Crédito'
-                        ? 'bg-amber-600/15 border-amber-500 text-amber-300 shadow-lg shadow-amber-500/5'
-                        : 'bg-white/5 hover:bg-white/10 border-white/10 text-slate-400'
-                    }`}
-                  >
-                    <span className="text-lg">📋</span>
-                    <span>Crédito</span>
-                  </button>
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-400">Stock Actual:</span>
+                  <span className="font-bold text-emerald-400 font-mono">
+                    {currentAvailableStock} unidades
+                  </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-400">Precio Unitario:</span>
+                  <span className="font-bold text-white font-mono">
+                    ${product.sellingPrice.toLocaleString('es-CL')}
+                  </span>
                 </div>
               </div>
-
-              {/* Debtor Client Name and Amount Input */}
-              {paymentMethod === 'Crédito' && (
-                <div className="space-y-3 p-3.5 bg-amber-500/5 rounded-xl border border-amber-500/20">
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-amber-400 uppercase font-mono tracking-wider flex items-center gap-1.5">
-                      Cliente Deudor <span className="text-rose-400">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={debtorName}
-                      onChange={(e) => {
-                        setDebtorName(e.target.value);
-                        if (e.target.value.trim()) setError('');
-                      }}
-                      placeholder="Nombre del cliente"
-                      className="w-full px-4 py-2.5 rounded-xl border border-amber-500/20 focus:ring-2 focus:ring-amber-500/30 focus:border-amber-400 transition-all outline-none bg-slate-950 text-white placeholder-slate-500 text-sm font-semibold"
-                      required
-                    />
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-amber-400 uppercase font-mono tracking-wider flex items-center gap-1.5">
-                      Monto que Debe ($) <span className="text-rose-400">*</span>
-                    </label>
-                    <div className="relative">
-                      <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-sm font-mono">$</span>
-                      <input
-                        type="number"
-                        min="0"
-                        value={debtAmountInput}
-                        onChange={(e) => {
-                          setDebtAmountInput(e.target.value);
-                          if (e.target.value.trim()) setError('');
-                        }}
-                        placeholder="Monto adeudado"
-                        className="w-full pl-8 pr-4 py-2.5 rounded-xl border border-amber-500/20 focus:ring-2 focus:ring-amber-500/30 focus:border-amber-400 transition-all outline-none bg-slate-950 text-white placeholder-slate-500 text-sm font-mono font-bold"
-                        required
-                      />
-                    </div>
-                  </div>
-
-                  <p className="text-[10px] text-amber-300/80 font-medium">
-                    Se registrará esta venta con una deuda inicial de ${parseFloat(debtAmountInput || '0').toLocaleString('es-CL')}.
-                  </p>
-                </div>
-              )}
 
               {error && (
-                <div className="p-3 bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs rounded-xl font-semibold">
-                  {error}
+                <div className="p-3 bg-rose-500/15 border border-rose-500/25 text-rose-300 rounded-xl text-xs flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                  <span>{error}</span>
                 </div>
               )}
 
-              {/* Device identification metadata */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-400 uppercase font-mono tracking-wider flex items-center gap-1.5">
-                  <Smartphone className="w-3.5 h-3.5 text-slate-400" /> Celular Registrador <span className="text-slate-500">(Metadato)</span>
-                </label>
-                <input
-                  type="text"
-                  value={deviceModel}
-                  onChange={(e) => setDeviceModel(e.target.value)}
-                  placeholder="Ej. Samsung Galaxy S24 Ultra"
-                  className="w-full px-4 py-2.5 rounded-xl border border-white/10 focus:ring-2 focus:ring-emerald-500/30 focus:border-emerald-400 transition-all outline-none bg-white/5 focus:bg-white/10 text-white placeholder-slate-500 text-sm font-semibold"
-                  required
-                />
-                <p className="text-[10px] text-slate-500 font-medium px-1 leading-normal flex items-center gap-1">
-                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
-                  Se guardará como registro histórico en la colección de ventas.
-                </p>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="pt-4 border-t border-white/15 flex items-center justify-end gap-3">
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="px-4.5 py-2 hover:bg-white/5 text-slate-300 border border-white/5 rounded-xl text-xs font-semibold transition-all cursor-pointer"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="button"
-                  onClick={handleConfirm}
-                  disabled={isSubmitting}
-                  className="px-4.5 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-emerald-800 disabled:text-slate-400 text-white font-bold rounded-xl text-xs transition-all shadow-lg shadow-emerald-500/20 flex items-center gap-2 cursor-pointer"
-                >
-                  {isSubmitting ? (
-                    <>
-                      <div className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      Registrando...
-                    </>
-                  ) : (
-                    'Confirmar Venta'
+              <form onSubmit={handleSubmit} className="space-y-4">
+                {/* Quantity input with stepper */}
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                    Cantidad a Vender
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleStepQty(-1)}
+                      disabled={saleQty <= 1}
+                      className="w-10 h-10 bg-white/10 hover:bg-white/15 border border-white/10 text-white rounded-xl flex items-center justify-center font-bold text-lg disabled:opacity-40 transition-colors cursor-pointer"
+                    >
+                      -
+                    </button>
+                    <input
+                      type="number"
+                      min={1}
+                      max={currentAvailableStock}
+                      value={saleQty}
+                      onChange={handleQtyChange}
+                      className="flex-1 h-10 px-3 bg-slate-950/80 border border-white/10 rounded-xl text-center font-mono font-bold text-white text-base focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleStepQty(1)}
+                      disabled={saleQty >= currentAvailableStock}
+                      className="w-10 h-10 bg-white/10 hover:bg-white/15 border border-white/10 text-white rounded-xl flex items-center justify-center font-bold text-lg disabled:opacity-40 transition-colors cursor-pointer"
+                    >
+                      +
+                    </button>
+                  </div>
+                  {saleQty > currentAvailableStock && (
+                    <p className="text-[11px] text-rose-400 mt-1 font-medium">
+                      Excede el stock disponible ({currentAvailableStock}).
+                    </p>
                   )}
-                </button>
-              </div>
+                </div>
+
+                {/* Payment Method */}
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                    Método de Pago
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(['Efectivo', 'Transferencia', 'Crédito'] as const).map((method) => (
+                      <button
+                        key={method}
+                        type="button"
+                        onClick={() => setPaymentMethod(method)}
+                        className={`py-2 px-2 text-xs font-medium rounded-xl border transition-all cursor-pointer ${
+                          paymentMethod === method
+                            ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40 font-semibold shadow-sm'
+                            : 'bg-white/5 border-white/10 text-slate-400 hover:text-white hover:bg-white/10'
+                        }`}
+                      >
+                        {method}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Conditional Debtor Fields */}
+                {paymentMethod === 'Crédito' && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl space-y-3"
+                  >
+                    <div>
+                      <label className="block text-[11px] font-medium text-amber-300 mb-1">
+                        Nombre del Cliente Deudor <span className="text-rose-400">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={debtorName}
+                        onChange={(e) => setDebtorName(e.target.value)}
+                        placeholder="Ej. Juan Pérez"
+                        className="w-full px-3 py-1.5 bg-slate-950/80 border border-white/10 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-medium text-amber-300 mb-1">
+                        Monto de Deuda ($)
+                      </label>
+                      <input
+                        type="number"
+                        value={debtAmountInput}
+                        onChange={(e) => setDebtAmountInput(e.target.value)}
+                        placeholder={`Total venta: $${totalSale}`}
+                        className="w-full px-3 py-1.5 bg-slate-950/80 border border-white/10 rounded-lg text-xs text-white placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-amber-500 font-mono"
+                      />
+                    </div>
+                  </motion.div>
+                )}
+
+                {/* Financial Summary */}
+                <div className="bg-slate-950/60 border border-white/10 rounded-xl p-3.5 space-y-1.5 text-xs">
+                  <div className="flex justify-between items-center text-slate-300">
+                    <span>Total a Cobrar:</span>
+                    <span className="text-base font-bold text-white font-mono">
+                      ${totalSale.toLocaleString('es-CL')}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center text-slate-400">
+                    <span>Ganancia Estimada:</span>
+                    <span className="font-semibold text-emerald-400 font-mono">
+                      +${profit.toLocaleString('es-CL')}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center text-slate-500 text-[11px] pt-1 border-t border-white/5">
+                    <span>Operador:</span>
+                    <span className="text-slate-300 font-medium">{operatorName}</span>
+                  </div>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex items-center gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    disabled={isSubmitting}
+                    className="flex-1 py-2.5 px-4 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isSubmitting || saleQty > currentAvailableStock || currentAvailableStock <= 0}
+                    className="flex-1 py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold transition-all shadow-lg shadow-emerald-600/20 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    {isSubmitting ? 'Registrando...' : 'Confirmar Venta'}
+                  </button>
+                </div>
+              </form>
             </div>
           </motion.div>
         </div>

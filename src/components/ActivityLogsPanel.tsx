@@ -21,7 +21,7 @@ export default function ActivityLogsPanel({ logs, onClearLogs }: ActivityLogsPan
   };
 
   return (
-    <div className="bg-white/5 backdrop-blur-lg border border-white/10 p-6 rounded-2xl shadow-lg flex flex-col h-[650px] max-h-full">
+    <div className="bg-white/5 backdrop-blur-lg border border-white/10 p-4 sm:p-6 rounded-2xl shadow-lg flex flex-col h-[650px] max-h-full">
       {/* Header */}
       <div className="flex items-center justify-between pb-4 border-b border-white/10 mb-4">
         <h3 className="text-base font-semibold text-white flex items-center gap-2">
