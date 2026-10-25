@@ -47,11 +47,12 @@ service cloud.firestore {
 
     match /catalogo_publico/{productoId} {
       allow read: if true;
-      allow write: if isAuthorizedAdmin();
+      allow write: if false;
     }
 
+    // El catálogo puede leer la plantilla pública de la tienda; la lista de admins sigue protegida.
     match /admin_config/{docId} {
-      allow read: if isSignedIn();
+      allow read: if isSignedIn() || docId == 'store';
       allow write: if isAuthorizedAdmin();
     }
   }
