@@ -1176,3 +1176,81 @@ export async function seedOfficialCatalog(
     handleFirestoreError(error, OperationType.WRITE, PRODUCTS_COLLECTION);
   }
 }
+
+export interface BulkBrandPriceUpdateItem {
+  id: string;
+  name: string;
+  brand: string;
+  oldSellingPrice: number;
+  newSellingPrice: number;
+  oldCostPrice: number;
+  newCostPrice: number;
+}
+
+// Actualización masiva de precios por marca
+export async function updatePricesByBrand(
+  items: BulkBrandPriceUpdateItem[],
+  brandName: string,
+  summaryReason: string,
+  operatorEmail: string = '',
+  operatorName: string = ''
+): Promise<{ updatedCount: number }> {
+  try {
+    if (!items || items.length === 0) {
+      return { updatedCount: 0 };
+    }
+
+    // Limit chunk to 200 items because each item writes to 'productos' and 'catalogo_publico' (400 ops <= 500 max)
+    const CHUNK_SIZE = 200;
+    let updatedCount = 0;
+
+    for (let i = 0; i < items.length; i += CHUNK_SIZE) {
+      const chunk = items.slice(i, i + CHUNK_SIZE);
+      const batch = writeBatch(db);
+
+      for (const item of chunk) {
+        // 1. Actualizar en colección principal de inventario 'productos'
+        const docRef = doc(db, PRODUCTS_COLLECTION, item.id);
+        batch.update(docRef, {
+          sellingPrice: item.newSellingPrice,
+          precio: item.newSellingPrice,
+          costPrice: item.newCostPrice,
+          precioCosto: item.newCostPrice,
+          updatedAt: Date.now(),
+          updatedBy: operatorEmail || 'Administrador'
+        });
+
+        // 2. Sincronizar inmediatamente en la colección de 'catalogo_publico'
+        const publicDocRef = doc(db, PUBLIC_CATALOG_COLLECTION, item.id);
+        batch.set(publicDocRef, {
+          precio: item.newSellingPrice,
+          updatedAt: Date.now()
+        }, { merge: true });
+
+        updatedCount++;
+      }
+
+      await batch.commit();
+    }
+
+    // Registrar en bitácora de auditoría
+    await logActivity({
+      productId: 'batch-price-update',
+      productName: `Marca: ${brandName}`,
+      type: 'adjustment',
+      quantity: updatedCount,
+      prevStock: 0,
+      newStock: 0,
+      costPrice: 0,
+      sellingPrice: 0,
+      reason: summaryReason || `Actualización masiva de precios para "${brandName}" (${updatedCount} artículos)`,
+      operatorEmail,
+      operatorName
+    });
+
+    return { updatedCount };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, PRODUCTS_COLLECTION);
+  }
+}
+

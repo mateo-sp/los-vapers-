@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { ShieldCheck, ShieldAlert, LogOut, ArrowRight, Lock } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, LogOut, ArrowRight } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 export default function AdminLoginView() {
@@ -50,21 +50,6 @@ export default function AdminLoginView() {
         {/* State 1: Unauthenticated */}
         {!user && (
           <div className="space-y-4">
-            <div className="p-4 bg-white/5 border border-white/5 rounded-2xl text-xs text-slate-300 space-y-2 leading-relaxed">
-              <div className="flex items-center gap-1.5 font-semibold text-slate-200">
-                <Lock className="w-3.5 h-3.5 text-indigo-400" />
-                <span>Panel Protegido con Inicio de Sesión</span>
-              </div>
-              <p className="text-slate-400 text-[11px]">
-                Todos tus productos cargados, el historial de ventas y los datos del negocio están 100% seguros y respaldados en la base de datos protegida.
-              </p>
-              <div className="pt-1 border-t border-white/5 flex flex-col gap-1 text-[11px] text-slate-400">
-                <span>Cuentas con acceso total autorizado:</span>
-                <span className="font-mono text-indigo-300">· djgamer802@gmail.com (Mateo)</span>
-                <span className="font-mono text-indigo-300">· supposimon@gmail.com (Simón)</span>
-              </div>
-            </div>
-
             <button
               type="button"
               onClick={async () => {
