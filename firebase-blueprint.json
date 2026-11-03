@@ -28,25 +28,6 @@
       },
       "required": ["name", "stock", "sellingPrice"]
     },
-    "publicCatalogProduct": {
-      "title": "PublicCatalogProduct",
-      "description": "Vista pública de un producto de inventario, sin datos internos",
-      "type": "object",
-      "properties": {
-        "nombre": { "type": "string" },
-        "marca": { "type": "string" },
-        "categoria": { "type": "string" },
-        "precio": { "type": "number" },
-        "disponible": { "type": "boolean" },
-        "inventorySource": { "type": "boolean" },
-        "inventoryDeleted": { "type": "boolean" },
-        "updatedAt": { "type": "number" },
-        "descripcion": { "type": "string" },
-        "imagenUrl": { "type": "string" },
-        "variantes": { "type": "array", "items": { "type": "string" } }
-      },
-      "required": ["nombre", "marca", "categoria", "precio", "disponible"]
-    },
     "activityLog": {
       "title": "ActivityLog",
       "description": "Registro de actividad de una transacción o ajuste de stock con operador",
@@ -103,6 +84,38 @@
         "voidBy": { "type": "string" }
       },
       "required": ["productId", "productName", "sellingPrice", "quantity", "paymentMethod", "timestamp"]
+    },
+    "publicProduct": {
+      "title": "PublicProduct",
+      "description": "Producto visible públicamente en el catálogo web para clientes",
+      "type": "object",
+      "properties": {
+        "nombre": { "type": "string" },
+        "name": { "type": "string" },
+        "marca": { "type": "string" },
+        "brand": { "type": "string" },
+        "categoria": { "type": "string" },
+        "category": { "type": "string" },
+        "precio": { "type": "number" },
+        "price": { "type": "number" },
+        "sellingPrice": { "type": "number" },
+        "stock": { "type": "integer" },
+        "cantidad": { "type": "integer" },
+        "disponible": { "type": "boolean" },
+        "inStock": { "type": "boolean" },
+        "sku": { "type": "string" },
+        "descripcion": { "type": "string" },
+        "description": { "type": "string" },
+        "imagenUrl": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "variantes": { "type": "array", "items": { "type": "string" } },
+        "variants": { "type": "array", "items": { "type": "string" } },
+        "inventorySource": { "type": "boolean" },
+        "inventoryDeleted": { "type": "boolean" },
+        "isDeleted": { "type": "boolean" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["nombre", "marca", "precio", "disponible"]
     }
   },
   "firestore": {
@@ -111,8 +124,8 @@
       "description": "Colección de productos del catálogo de inventario"
     },
     "/catalogo_publico/{productId}": {
-      "schema": "publicCatalogProduct",
-      "description": "Catálogo público sincronizado desde los productos del inventario"
+      "schema": "publicProduct",
+      "description": "Catálogo público accesible para la página web de clientes"
     },
     "/activityLogs/{logId}": {
       "schema": "activityLog",

@@ -6,6 +6,7 @@ import {
   updateDoc,
   setDoc,
   deleteDoc,
+  getDoc,
   onSnapshot,
   query,
   orderBy,
@@ -14,8 +15,7 @@ import {
   writeBatch,
   runTransaction
 } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
-import { db, auth, functions } from '../firebase';
+import { db, auth } from '../firebase';
 import { Product, ActivityLog, ProductInput, Venta } from '../types';
 import { sampleProducts } from '../data/sampleProducts';
 
@@ -24,6 +24,7 @@ const PRODUCTS_COLLECTION = 'productos';
 const VENTAS_COLLECTION = 'ventas';
 const LOGS_COLLECTION = 'activityLogs';
 const CATEGORY_SETTINGS_COLLECTION = 'categoryThresholds';
+const PUBLIC_CATALOG_COLLECTION = 'catalogo_publico';
 
 enum OperationType {
   CREATE = 'create',
@@ -73,16 +74,162 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   throw new Error(JSON.stringify(errInfo));
 }
 
+export function buildPublicProductData(data: DocumentData | Partial<Product>): Record<string, unknown> {
+  const d = data as Record<string, any>;
+  const name = String(d.nombre !== undefined ? d.nombre : (d.name ?? '')).trim();
+  const brand = String(d.marca !== undefined ? d.marca : (d.brand ?? '')).trim();
+  const category = String(d.categoria !== undefined ? d.categoria : (d.category ?? 'Vapes')).trim();
+  const price = Number(d.precio !== undefined ? d.precio : (d.sellingPrice ?? 0));
+  const rawStock = Number(d.cantidad !== undefined ? d.cantidad : (d.stock ?? 0));
+  const isDeleted = d.isDeleted === true;
+  const isAvailable = rawStock > 0 && !isDeleted;
+
+  const publicProduct: Record<string, unknown> = {
+    // Both Spanish and English field names for complete compatibility with any external app
+    nombre: name,
+    name: name,
+    marca: brand,
+    brand: brand,
+    categoria: category,
+    category: category,
+    precio: price,
+    price: price,
+    sellingPrice: price,
+    cantidad: rawStock,
+    stock: rawStock,
+    disponible: isAvailable,
+    inStock: isAvailable,
+    inventorySource: true,
+    inventoryDeleted: isDeleted,
+    isDeleted: isDeleted,
+    updatedAt: typeof d.updatedAt === 'number' ? d.updatedAt : Date.now(),
+  };
+
+  const sku = d.sku;
+  if (typeof sku === 'string' && sku.trim()) {
+    publicProduct.sku = sku.trim();
+  }
+
+  const description = d.publicDescription ?? d.descripcionPublica;
+  const publicDescription = typeof description === 'string' ? description.trim() : '';
+  publicProduct.descripcion = publicDescription;
+  publicProduct.description = publicDescription;
+
+  const imageUrl = d.imagenUrl ?? d.imageUrl ?? d.image;
+  if (typeof imageUrl === 'string' && imageUrl.trim()) {
+    publicProduct.imagenUrl = imageUrl.trim();
+    publicProduct.imageUrl = imageUrl.trim();
+  }
+
+  const variants = d.variantes ?? d.variants ?? d.flavors;
+  if (Array.isArray(variants)) {
+    const cleanVariants = variants.filter(
+      (variant: unknown): variant is string => typeof variant === 'string' && variant.trim().length > 0
+    );
+    publicProduct.variantes = cleanVariants;
+    publicProduct.variants = cleanVariants;
+  }
+
+  return publicProduct;
+}
+
+export async function syncSinglePublicCatalogProduct(productId: string, data: DocumentData | Partial<Product>) {
+  try {
+    const publicData = buildPublicProductData(data);
+    await setDoc(doc(db, PUBLIC_CATALOG_COLLECTION, productId), publicData, { merge: true });
+  } catch (err) {
+    console.warn(`Alerta sincronizando producto ${productId} en catalogo_publico:`, err);
+  }
+}
+
+export async function removePublicCatalogProduct(productId: string) {
+  try {
+    const publicProductRef = doc(db, PUBLIC_CATALOG_COLLECTION, productId);
+    await deleteDoc(publicProductRef);
+  } catch (err) {
+    console.warn(`Alerta eliminando producto ${productId} de catalogo_publico:`, err);
+  }
+}
+
+// Sincronización completa manual o automática de TODOS los productos hacia catalogo_publico
+export async function syncAllProductsToPublicCatalog(
+  operatorEmail: string = '',
+  operatorName: string = ''
+): Promise<{ total: number; synced: number; deleted: number }> {
+  try {
+    const querySnapshot = await getDocs(collection(db, PRODUCTS_COLLECTION));
+    const allProductsDocs = querySnapshot.docs;
+    const CHUNK_SIZE = 150;
+    let synced = 0;
+    let deleted = 0;
+
+    for (let i = 0; i < allProductsDocs.length; i += CHUNK_SIZE) {
+      const chunk = allProductsDocs.slice(i, i + CHUNK_SIZE);
+      const batch = writeBatch(db);
+
+      for (const productDoc of chunk) {
+        const data = productDoc.data();
+        const publicDocRef = doc(db, PUBLIC_CATALOG_COLLECTION, productDoc.id);
+
+        if (data.isDeleted) {
+          batch.delete(publicDocRef);
+          deleted++;
+        } else {
+          const publicPayload = buildPublicProductData(data);
+          batch.set(publicDocRef, publicPayload, { merge: true });
+          synced++;
+        }
+      }
+
+      await batch.commit();
+    }
+
+    await logActivity({
+      productId: 'full-catalog-sync',
+      productName: 'Catálogo Público Web',
+      type: 'adjustment',
+      quantity: synced,
+      prevStock: 0,
+      newStock: synced,
+      costPrice: 0,
+      sellingPrice: 0,
+      reason: `Sincronización masiva al catálogo público (${synced} activos, ${deleted} eliminados)`,
+      operatorEmail,
+      operatorName
+    });
+
+    return { total: allProductsDocs.length, synced, deleted };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, PUBLIC_CATALOG_COLLECTION);
+  }
+}
 // Subscribe to real-time products
 // We do not use orderBy('createdAt') in the query because Firestore strictly excludes
 // any documents that lack that field. Instead, we query the collection and sort in memory.
 export function subscribeToProducts(
-  callback: (products: Product[]) => void
+  callback: (products: Product[]) => void,
+  onCatalogSyncError?: (error: Error) => void
 ) {
   const q = collection(db, PRODUCTS_COLLECTION);
   
   return onSnapshot(q, (snapshot) => {
     try {
+      // Background synchronization for live changes
+      const syncPromises = snapshot.docChanges().map(async (change) => {
+        try {
+          if (change.type === 'removed') {
+            await removePublicCatalogProduct(change.doc.id);
+          } else {
+            await syncSinglePublicCatalogProduct(change.doc.id, change.doc.data());
+          }
+        } catch (e) {
+          console.warn('Error en sincronización unitaria de catálogo:', e);
+        }
+      });
+      void Promise.all(syncPromises).catch((err) => {
+        onCatalogSyncError?.(err instanceof Error ? err : new Error(String(err)));
+      });
+
       const products: Product[] = [];
       snapshot.forEach((doc) => {
         const data = doc.data();
@@ -119,20 +266,6 @@ export function subscribeToProducts(
   });
 }
 
-export async function reconcilePublicCatalog(): Promise<{ synced: number; removed: number }> {
-  try {
-    const reconcile = httpsCallable<Record<string, never>, { synced: number; removed: number }>(
-      functions,
-      'reconcilePublicCatalog',
-      { timeout: 540000 }
-    );
-    const result = await reconcile({});
-    return result.data;
-  } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, 'catalogo_publico');
-  }
-}
-
 // Add a new product
 export async function addProduct(
   productInput: ProductInput, 
@@ -161,6 +294,13 @@ export async function addProduct(
       isDeleted: false
     });
     
+    // Sincronizar directamente con el catálogo público
+    await syncSinglePublicCatalogProduct(docRef.id, {
+      ...productInput,
+      isDeleted: false,
+      updatedAt: Date.now()
+    });
+
     // Log activity
     await logActivity({
       productId: docRef.id,
@@ -209,6 +349,13 @@ export async function updateProduct(
     
     await updateDoc(docRef, dataToUpdate);
 
+    // Sincronizar directamente con el catálogo público
+    const combinedState = {
+      ...(updates.previousState || {}),
+      ...dataToUpdate
+    };
+    await syncSinglePublicCatalogProduct(id, combinedState);
+
     if (updates.previousState && updates.stock !== undefined && updates.stock !== updates.previousState.stock) {
       const diff = updates.stock - updates.previousState.stock;
       await logActivity({
@@ -247,6 +394,9 @@ export async function moveToTrashProduct(
       updatedBy: operatorEmail
     });
 
+    // Eliminar del catálogo público para que no aparezca a los clientes en la web
+    await removePublicCatalogProduct(id);
+
     await logActivity({
       productId: id,
       productName: name,
@@ -282,6 +432,11 @@ export async function restoreProductFromTrash(
       updatedBy: operatorEmail
     });
 
+    const restoredSnap = await getDoc(docRef);
+    if (restoredSnap.exists()) {
+      await syncSinglePublicCatalogProduct(id, restoredSnap.data());
+    }
+
     await logActivity({
       productId: id,
       productName: name,
@@ -309,6 +464,7 @@ export async function permanentDeleteProduct(
 ): Promise<void> {
   try {
     await deleteDoc(doc(db, PRODUCTS_COLLECTION, id));
+    await removePublicCatalogProduct(id);
     
     await logActivity({
       productId: id,
@@ -353,6 +509,14 @@ export async function adjustStockWithReason(
       cantidad: newStock,
       updatedAt: Date.now(),
       updatedBy: operatorEmail
+    });
+
+    // Sincronizar catálogo público de inmediato
+    await syncSinglePublicCatalogProduct(product.id, {
+      ...product,
+      stock: newStock,
+      cantidad: newStock,
+      updatedAt: Date.now()
     });
 
     await logActivity({
@@ -442,7 +606,7 @@ export async function executeSaleTransaction(input: SaleTransactionInput): Promi
 
       const newStock = currentStock - input.quantity;
 
-      // 1. Actualizar producto
+      // 1. Actualizar producto en el inventario
       transaction.update(productRef, {
         stock: newStock,
         cantidad: newStock,
@@ -450,7 +614,17 @@ export async function executeSaleTransaction(input: SaleTransactionInput): Promi
         updatedBy: input.operatorEmail
       });
 
-      // 2. Crear documento de Venta
+      // 2. Sincronizar catálogo público en la misma transacción atómica
+      const publicDocRef = doc(db, PUBLIC_CATALOG_COLLECTION, input.productId);
+      const publicPayload = buildPublicProductData({
+        ...pData,
+        stock: newStock,
+        cantidad: newStock,
+        updatedAt: Date.now()
+      });
+      transaction.set(publicDocRef, publicPayload, { merge: true });
+
+      // 3. Crear documento de Venta
       const debtAmountVal = input.debtAmount !== undefined 
         ? input.debtAmount 
         : (input.isPaid ? 0 : (input.sellingPrice * input.quantity));
@@ -483,7 +657,7 @@ export async function executeSaleTransaction(input: SaleTransactionInput): Promi
         montoDeuda: debtAmountVal
       });
 
-      // 3. Crear registro en bitácora
+      // 4. Crear registro en bitácora
       transaction.set(logRef, {
         productId: input.productId,
         productName: input.productName,
@@ -559,6 +733,15 @@ export async function voidSaleTransaction(
             updatedAt: Date.now(),
             updatedBy: operatorEmail
           });
+
+          // Sincronizar catálogo público
+          const publicDocRef = doc(db, PUBLIC_CATALOG_COLLECTION, productId);
+          transaction.set(publicDocRef, buildPublicProductData({
+            ...pData,
+            stock: newStock,
+            cantidad: newStock,
+            updatedAt: Date.now()
+          }), { merge: true });
         }
       }
 
@@ -819,6 +1002,7 @@ export async function emptyTrash(operatorEmail: string = '', operatorName: strin
     querySnapshot.forEach((docSnap) => {
       if (docSnap.data().isDeleted) {
         batch.delete(docSnap.ref);
+        batch.delete(doc(db, PUBLIC_CATALOG_COLLECTION, docSnap.id));
         count++;
       }
     });
@@ -1089,11 +1273,31 @@ export async function seedOfficialCatalog(
             updatedBy: operatorEmail || 'Sistema',
             isDeleted: false
           });
+
+          // Sincronizar catálogo público con datos completos
+          const publicDocRef = doc(db, PUBLIC_CATALOG_COLLECTION, existing.id);
+          batch.set(publicDocRef, buildPublicProductData({
+            name: item.name,
+            nombre: item.name,
+            brand: item.brand,
+            marca: item.brand,
+            category: 'Vapes',
+            categoria: 'Vapes',
+            stock: existing.stock,
+            cantidad: existing.stock,
+            sellingPrice: item.sellingPrice,
+            precio: item.sellingPrice,
+            sku: existing.sku || '',
+            notes: 'Catálogo oficial de vapes cargado',
+            isDeleted: false,
+            updatedAt: Date.now()
+          }), { merge: true });
+
           updated++;
         } else {
           const docRef = doc(collection(db, PRODUCTS_COLLECTION));
           const sku = item.brand.toUpperCase().replace(/[^A-Z0-9]/g, '').substring(0, 5) + '-' + Math.random().toString(36).substring(2, 7).toUpperCase();
-          batch.set(docRef, {
+          const docPayload = {
             name: item.name,
             nombre: item.name,
             brand: item.brand,
@@ -1111,7 +1315,13 @@ export async function seedOfficialCatalog(
             updatedAt: Date.now(),
             updatedBy: operatorEmail || 'Sistema',
             isDeleted: false
-          });
+          };
+          batch.set(docRef, docPayload);
+
+          // Sincronizar catálogo público con datos completos
+          const publicDocRef = doc(db, PUBLIC_CATALOG_COLLECTION, docRef.id);
+          batch.set(publicDocRef, buildPublicProductData(docPayload), { merge: true });
+
           created++;
         }
       }
@@ -1136,5 +1346,87 @@ export async function seedOfficialCatalog(
     return { created, updated };
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, PRODUCTS_COLLECTION);
+  }
+}
+
+export interface BulkBrandPriceUpdateItem {
+  id: string;
+  name: string;
+  brand: string;
+  oldSellingPrice: number;
+  newSellingPrice: number;
+  oldCostPrice: number;
+  newCostPrice: number;
+}
+
+// Actualización masiva de precios por marca
+export async function updatePricesByBrand(
+  items: BulkBrandPriceUpdateItem[],
+  brandName: string,
+  summaryReason: string,
+  operatorEmail: string = '',
+  operatorName: string = ''
+): Promise<{ updatedCount: number }> {
+  try {
+    if (!items || items.length === 0) {
+      return { updatedCount: 0 };
+    }
+
+    // Limit chunk to 200 items because each item writes to 'productos' and 'catalogo_publico' (400 ops <= 500 max)
+    const CHUNK_SIZE = 200;
+    let updatedCount = 0;
+
+    for (let i = 0; i < items.length; i += CHUNK_SIZE) {
+      const chunk = items.slice(i, i + CHUNK_SIZE);
+      const batch = writeBatch(db);
+
+      for (const item of chunk) {
+        // 1. Actualizar en colección principal de inventario 'productos'
+        const docRef = doc(db, PRODUCTS_COLLECTION, item.id);
+        batch.update(docRef, {
+          sellingPrice: item.newSellingPrice,
+          precio: item.newSellingPrice,
+          costPrice: item.newCostPrice,
+          precioCosto: item.newCostPrice,
+          updatedAt: Date.now(),
+          updatedBy: operatorEmail || 'Administrador'
+        });
+
+        // 2. Sincronizar inmediatamente en la colección de 'catalogo_publico' con datos completos
+        const publicDocRef = doc(db, PUBLIC_CATALOG_COLLECTION, item.id);
+        batch.set(publicDocRef, buildPublicProductData({
+          name: item.name,
+          nombre: item.name,
+          brand: item.brand,
+          marca: item.brand,
+          sellingPrice: item.newSellingPrice,
+          precio: item.newSellingPrice,
+          updatedAt: Date.now()
+        }), { merge: true });
+
+        updatedCount++;
+      }
+
+      await batch.commit();
+    }
+
+    // Registrar en bitácora de auditoría
+    await logActivity({
+      productId: 'batch-price-update',
+      productName: `Marca: ${brandName}`,
+      type: 'adjustment',
+      quantity: updatedCount,
+      prevStock: 0,
+      newStock: 0,
+      costPrice: 0,
+      sellingPrice: 0,
+      reason: summaryReason || `Actualización masiva de precios para "${brandName}" (${updatedCount} artículos)`,
+      operatorEmail,
+      operatorName
+    });
+
+    return { updatedCount };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, PRODUCTS_COLLECTION);
   }
 }

@@ -19,12 +19,13 @@ import {
   LogOut,
   ShieldCheck,
   UserCheck,
-  Layers
+  Layers,
+  Tag,
+  Globe
 } from 'lucide-react';
 
 import {
   subscribeToProducts,
-  reconcilePublicCatalog,
   addProduct,
   updateProduct,
   moveToTrashProduct,
@@ -40,7 +41,8 @@ import {
   clearAllVentas,
   updateVenta,
   exportAllDataAsJson,
-  seedOfficialCatalog
+  seedOfficialCatalog,
+  syncAllProductsToPublicCatalog
 } from './services/dbService';
 import { Product, ProductInput, ActivityLog, Venta } from './types';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -59,6 +61,7 @@ import AdminLoginView from './components/AdminLoginView';
 import VoidSaleModal from './components/VoidSaleModal';
 import StockAdjustmentModal from './components/StockAdjustmentModal';
 import TrashModal from './components/TrashModal';
+import BulkBrandPriceModal from './components/BulkBrandPriceModal';
 
 function MainApp() {
   const { user, isAuthorizedAdmin, operatorEmail, operatorName, logout, loading: authLoading } = useAuth();
@@ -84,6 +87,7 @@ function MainApp() {
   const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isTrashModalOpen, setIsTrashModalOpen] = useState(false);
+  const [isBulkBrandPriceModalOpen, setIsBulkBrandPriceModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
 
   // Action Modals State
@@ -103,9 +107,10 @@ function MainApp() {
 
   // Catalog initialization loading state & feedback
   const [isSeeding, setIsSeeding] = useState(false);
+  const [isSyncingPublic, setIsSyncingPublic] = useState(false);
   const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
   const hasAutoSeededRef = useRef(false);
-  const hasReconciledCatalogRef = useRef(false);
+  const hasAutoSyncedPublicRef = useRef(false);
 
   const showToast = (type: 'success' | 'error' | 'info', text: string) => {
     setToastMessage({ type, text });
@@ -128,6 +133,20 @@ function MainApp() {
     }
   };
 
+  const handleSyncPublicCatalog = async () => {
+    if (isSyncingPublic) return;
+    try {
+      setIsSyncingPublic(true);
+      const res = await syncAllProductsToPublicCatalog(operatorEmail, operatorName);
+      showToast('success', `¡Catálogo público web sincronizado! ${res.synced} productos visibles para clientes.`);
+    } catch (err: any) {
+      console.error('Error sincronizando catálogo público:', err);
+      showToast('error', 'Error al sincronizar catálogo público: ' + (err?.message || 'Verifica la conexión.'));
+    } finally {
+      setIsSyncingPublic(false);
+    }
+  };
+
   // Load products, logs, and sales in real-time ONLY once authenticated
   useEffect(() => {
     if (authLoading) return;
@@ -136,27 +155,21 @@ function MainApp() {
       setLogs([]);
       setVentas([]);
       setLoading(false);
-      hasReconciledCatalogRef.current = false;
       return;
     }
 
     setLoading(true);
-    if (!hasReconciledCatalogRef.current) {
-      hasReconciledCatalogRef.current = true;
-      void reconcilePublicCatalog()
-        .then(({ synced, removed }) => {
-          showToast('success', `Catálogo público actualizado: ${synced} productos sincronizados y ${removed} obsoletos eliminados.`);
-        })
-        .catch((error: unknown) => {
-          console.error('Error reparando el catálogo público:', error);
-          showToast('error', 'No se pudo reparar el catálogo público. Verifica que las funciones de Firebase estén desplegadas y vuelve a intentarlo.');
-        });
-    }
     
-    const unsubscribeProducts = subscribeToProducts((loadedProducts) => {
-      setProducts(loadedProducts);
-      setLoading(false);
-    });
+    const unsubscribeProducts = subscribeToProducts(
+      (loadedProducts) => {
+        setProducts(loadedProducts);
+        setLoading(false);
+      },
+      (error) => showToast(
+        'error',
+        `No se pudo actualizar el catálogo público: ${error.message}`
+      )
+    );
 
     const unsubscribeLogs = subscribeToActivityLogs((loadedLogs) => {
       setLogs(loadedLogs);
@@ -180,6 +193,16 @@ function MainApp() {
       handleSeedCatalog();
     }
   }, [loading, isAuthorizedAdmin, products.length, isSeeding]);
+
+  // Automatically guarantee that public catalog has all active products (including IGNITE V300 and others)
+  useEffect(() => {
+    if (!loading && isAuthorizedAdmin && products.length > 0 && !hasAutoSyncedPublicRef.current && !isSyncingPublic) {
+      hasAutoSyncedPublicRef.current = true;
+      syncAllProductsToPublicCatalog(operatorEmail, operatorName).catch((err) => {
+        console.warn('Auto sync warning:', err);
+      });
+    }
+  }, [loading, isAuthorizedAdmin, products.length, isSyncingPublic, operatorEmail, operatorName]);
 
   // Split active and trash products
   const activeProducts = useMemo(() => {
@@ -477,6 +500,19 @@ function MainApp() {
 
               <button
                 type="button"
+                onClick={handleSyncPublicCatalog}
+                disabled={isSyncingPublic}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/35 border border-emerald-500/30 text-emerald-300 rounded-xl text-xs font-semibold transition-all cursor-pointer disabled:opacity-50"
+                title="Sincronizar todos los productos de inmediato con la base pública de la web"
+              >
+                <Globe className={`w-3.5 h-3.5 text-emerald-400 ${isSyncingPublic ? 'animate-spin' : ''}`} />
+                <span className="hidden sm:inline">
+                  {isSyncingPublic ? 'Sincronizando...' : 'Sincronizar Web'}
+                </span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setIsTrashModalOpen(true)}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white/5 hover:bg-white/10 border border-white/10 text-slate-300 rounded-xl text-xs font-medium transition-colors relative cursor-pointer"
                 title="Abrir papelera de reciclaje"
@@ -542,7 +578,17 @@ function MainApp() {
           </div>
 
           {/* Quick Actions */}
-          <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+          <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto justify-end">
+            <button
+              type="button"
+              onClick={() => setIsBulkBrandPriceModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/30 text-indigo-300 rounded-xl text-xs font-semibold transition-colors cursor-pointer shadow-sm"
+              title="Ajustar precios en lote por marca"
+            >
+              <Tag className="w-3.5 h-3.5 text-indigo-400" />
+              <span>Precios por Marca</span>
+            </button>
+
             <button
               type="button"
               onClick={() => setIsWhatsAppModalOpen(true)}
@@ -627,19 +673,32 @@ function MainApp() {
 
                   {/* Brand Filter */}
                   {brands.length > 0 && (
-                    <select
-                      value={selectedBrand}
-                      onChange={(e) => setSelectedBrand(e.target.value)}
-                      aria-label="Filtrar por marca"
-                      className="py-2 px-3 bg-slate-900/90 border border-white/10 rounded-xl text-xs text-slate-200 focus:outline-none"
-                    >
-                      <option value="">Todas las marcas</option>
-                      {brands.map((b) => (
-                        <option key={b} value={b}>
-                          {b}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="flex items-center gap-1.5">
+                      <select
+                        value={selectedBrand}
+                        onChange={(e) => setSelectedBrand(e.target.value)}
+                        aria-label="Filtrar por marca"
+                        className="py-2 px-3 bg-slate-900/90 border border-white/10 rounded-xl text-xs text-slate-200 focus:outline-none"
+                      >
+                        <option value="">Todas las marcas</option>
+                        {brands.map((b) => (
+                          <option key={b} value={b}>
+                            {b}
+                          </option>
+                        ))}
+                      </select>
+                      {selectedBrand && (
+                        <button
+                          type="button"
+                          onClick={() => setIsBulkBrandPriceModalOpen(true)}
+                          className="px-2.5 py-2 bg-indigo-600/25 hover:bg-indigo-600/40 border border-indigo-500/40 text-indigo-300 rounded-xl text-xs font-medium inline-flex items-center gap-1 transition-colors cursor-pointer shrink-0"
+                          title={`Ajustar precios de ${selectedBrand}`}
+                        >
+                          <Tag className="w-3 h-3 text-indigo-400" />
+                          <span className="hidden sm:inline">Precios</span>
+                        </button>
+                      )}
+                    </div>
                   )}
 
                   {/* Category Filter */}
@@ -887,6 +946,18 @@ function MainApp() {
           isOpen={isImportModalOpen}
           onClose={() => setIsImportModalOpen(false)}
           existingProducts={activeProducts}
+        />
+
+        {/* Bulk Brand Price Modal */}
+        <BulkBrandPriceModal
+          isOpen={isBulkBrandPriceModalOpen}
+          onClose={() => setIsBulkBrandPriceModalOpen(false)}
+          products={activeProducts}
+          brands={brands}
+          initialBrand={selectedBrand}
+          operatorEmail={operatorEmail}
+          operatorName={operatorName}
+          onSuccess={(msg) => showToast('success', msg)}
         />
 
         {/* Move to Trash Confirm Modal */}

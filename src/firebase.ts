@@ -1,7 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getFirestore } from 'firebase/firestore';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
-import { getFunctions } from 'firebase/functions';
 
 const firebaseConfig = {
   apiKey: "AIzaSyBDW4YERGEuskwGseBYMdmLT3zsaiCDD5E",
@@ -13,12 +12,10 @@ const firebaseConfig = {
 };
 
 // Initialize Firebase
-export const app = initializeApp(firebaseConfig);
+const app = initializeApp(firebaseConfig);
 
 // Initialize Firestore with custom database ID
 export const db = getFirestore(app, "ai-studio-b778b7a0-094e-4dd1-9b4e-402961cd1bcf");
-export const functions = getFunctions(app, 'us-central1');
-
 // Initialize Auth
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
