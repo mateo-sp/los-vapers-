@@ -18,6 +18,7 @@
         "precio": { "type": "number" },
         "sku": { "type": "string" },
         "notes": { "type": "string" },
+        "publicDescription": { "type": "string" },
         "createdAt": { "type": "number" },
         "updatedAt": { "type": "number" },
         "isDeleted": { "type": "boolean" },
@@ -26,6 +27,25 @@
         "updatedBy": { "type": "string" }
       },
       "required": ["name", "stock", "sellingPrice"]
+    },
+    "publicCatalogProduct": {
+      "title": "PublicCatalogProduct",
+      "description": "Vista pública de un producto de inventario, sin datos internos",
+      "type": "object",
+      "properties": {
+        "nombre": { "type": "string" },
+        "marca": { "type": "string" },
+        "categoria": { "type": "string" },
+        "precio": { "type": "number" },
+        "disponible": { "type": "boolean" },
+        "inventorySource": { "type": "boolean" },
+        "inventoryDeleted": { "type": "boolean" },
+        "updatedAt": { "type": "number" },
+        "descripcion": { "type": "string" },
+        "imagenUrl": { "type": "string" },
+        "variantes": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["nombre", "marca", "categoria", "precio", "disponible"]
     },
     "activityLog": {
       "title": "ActivityLog",
@@ -89,6 +109,10 @@
     "/productos/{productId}": {
       "schema": "product",
       "description": "Colección de productos del catálogo de inventario"
+    },
+    "/catalogo_publico/{productId}": {
+      "schema": "publicCatalogProduct",
+      "description": "Catálogo público sincronizado desde los productos del inventario"
     },
     "/activityLogs/{logId}": {
       "schema": "activityLog",

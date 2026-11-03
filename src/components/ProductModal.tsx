@@ -30,6 +30,7 @@ export default function ProductModal({
     sellingPrice: 0,
     sku: '',
     notes: '',
+    publicDescription: '',
   });
 
   const [error, setError] = useState('');
@@ -51,6 +52,7 @@ export default function ProductModal({
         sellingPrice: product.sellingPrice,
         sku: product.sku || '',
         notes: product.notes || '',
+        publicDescription: product.publicDescription || '',
       });
     } else {
       setFormData({
@@ -64,13 +66,14 @@ export default function ProductModal({
         sellingPrice: 0,
         sku: '',
         notes: '',
+        publicDescription: '',
       });
     }
     setError('');
   }, [product, isOpen]);
 
   const handleChange = (
-    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
+    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>
   ) => {
     const { name, value } = e.target;
     
@@ -285,6 +288,24 @@ export default function ProductModal({
                       *La cantidad se edita en la lista mediante las acciones de venta o restock.
                     </p>
                   )}
+                </div>
+
+                <div className="space-y-1.5">
+                  <label htmlFor="publicDescription" className="text-xs font-semibold text-slate-400 uppercase">
+                    Descripción pública
+                  </label>
+                  <textarea
+                    id="publicDescription"
+                    name="publicDescription"
+                    value={formData.publicDescription || ''}
+                    onChange={handleChange}
+                    placeholder="Información que se mostrará en el catálogo público"
+                    rows={3}
+                    className="w-full px-4 py-2.5 rounded-xl border border-white/10 focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-400 transition-all outline-none bg-white/5 focus:bg-white/10 text-white placeholder-slate-500 text-sm resize-y"
+                  />
+                  <p className="text-[10px] text-slate-400 px-1">
+                    Las notas internas y los costos nunca se publican.
+                  </p>
                 </div>
               </div>
 

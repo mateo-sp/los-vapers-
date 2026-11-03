@@ -10,6 +10,7 @@ export interface Product {
   sellingPrice: number;
   sku: string;
   notes?: string;
+  publicDescription?: string;
   createdAt: number;
   updatedAt: number;
   isDeleted?: boolean;
@@ -58,4 +59,3 @@ export interface Venta {
 }
 
 export type ProductInput = Omit<Product, 'id' | 'createdAt' | 'updatedAt' | 'isDeleted' | 'deletedAt' | 'deletedBy'>;
-

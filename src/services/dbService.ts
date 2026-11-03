@@ -6,7 +6,6 @@ import {
   updateDoc,
   setDoc,
   deleteDoc,
-  getDoc,
   onSnapshot,
   query,
   orderBy,
@@ -15,7 +14,8 @@ import {
   writeBatch,
   runTransaction
 } from 'firebase/firestore';
-import { db, auth } from '../firebase';
+import { httpsCallable } from 'firebase/functions';
+import { db, auth, functions } from '../firebase';
 import { Product, ActivityLog, ProductInput, Venta } from '../types';
 import { sampleProducts } from '../data/sampleProducts';
 
@@ -24,7 +24,6 @@ const PRODUCTS_COLLECTION = 'productos';
 const VENTAS_COLLECTION = 'ventas';
 const LOGS_COLLECTION = 'activityLogs';
 const CATEGORY_SETTINGS_COLLECTION = 'categoryThresholds';
-const PUBLIC_CATALOG_COLLECTION = 'catalogo_publico';
 
 enum OperationType {
   CREATE = 'create',
@@ -74,71 +73,16 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   throw new Error(JSON.stringify(errInfo));
 }
 
-async function syncPublicCatalogProduct(productId: string, data: DocumentData) {
-  const publicProduct: Record<string, unknown> = {
-    nombre: data.nombre ?? data.name ?? '',
-    marca: data.marca ?? data.brand ?? '',
-    categoria: data.category ?? data.categoria ?? 'Vapes',
-    precio: Number(data.precio ?? data.sellingPrice ?? 0),
-    disponible: Number(data.cantidad ?? data.stock ?? 0) > 0,
-    inventorySource: true,
-    inventoryDeleted: data.isDeleted === true,
-    updatedAt: typeof data.updatedAt === 'number' ? data.updatedAt : Date.now(),
-  };
-  const description = data.notes ?? data.notas ?? data.description ?? data.descripcion;
-  if (typeof description === 'string' && description.trim()) {
-    publicProduct.descripcion = description;
-  }
-  const imageUrl = data.imagenUrl ?? data.imageUrl ?? data.image;
-  if (typeof imageUrl === 'string' && imageUrl.trim()) {
-    publicProduct.imagenUrl = imageUrl;
-  }
-  const variants = data.variantes ?? data.variants ?? data.flavors;
-  if (Array.isArray(variants)) {
-    publicProduct.variantes = variants.filter(
-      (variant): variant is string => typeof variant === 'string'
-    );
-  }
-
-  await setDoc(
-    doc(db, PUBLIC_CATALOG_COLLECTION, productId),
-    publicProduct,
-    { merge: true }
-  );
-}
-
-async function removePublicCatalogProduct(productId: string) {
-  const publicProductRef = doc(db, PUBLIC_CATALOG_COLLECTION, productId);
-  const publicProduct = await getDoc(publicProductRef);
-  if (publicProduct.exists() && publicProduct.data().inventorySource === true) {
-    await deleteDoc(publicProductRef);
-  }
-}
-
 // Subscribe to real-time products
 // We do not use orderBy('createdAt') in the query because Firestore strictly excludes
 // any documents that lack that field. Instead, we query the collection and sort in memory.
 export function subscribeToProducts(
-  callback: (products: Product[]) => void,
-  onCatalogSyncError?: (error: Error) => void
+  callback: (products: Product[]) => void
 ) {
   const q = collection(db, PRODUCTS_COLLECTION);
   
   return onSnapshot(q, (snapshot) => {
     try {
-      const catalogSync = snapshot.docChanges().map((change) =>
-        change.type === 'removed'
-          ? removePublicCatalogProduct(change.doc.id)
-          : syncPublicCatalogProduct(change.doc.id, change.doc.data())
-      );
-      void Promise.all(catalogSync).catch((error: unknown) => {
-        const syncError = error instanceof Error
-          ? error
-          : new Error(String(error));
-        console.error('Error sincronizando el catálogo público:', syncError);
-        onCatalogSyncError?.(syncError);
-      });
-
       const products: Product[] = [];
       snapshot.forEach((doc) => {
         const data = doc.data();
@@ -155,6 +99,7 @@ export function subscribeToProducts(
           sellingPrice: Number(data.precio !== undefined ? data.precio : (data.sellingPrice ?? 0)),
           sku: data.sku ?? '',
           notes: data.notes ?? data.notas ?? '',
+          publicDescription: data.publicDescription ?? data.descripcionPublica ?? '',
           createdAt: typeof data.createdAt === 'number' ? data.createdAt : Date.now(),
           updatedAt: typeof data.updatedAt === 'number' ? data.updatedAt : Date.now(),
           isDeleted: !!data.isDeleted,
@@ -171,8 +116,21 @@ export function subscribeToProducts(
     }
   }, (error) => {
     console.warn('Alerta en suscripción a productos (esperando autenticación si aplica):', error?.message || error);
-    onCatalogSyncError?.(error);
   });
+}
+
+export async function reconcilePublicCatalog(): Promise<{ synced: number; removed: number }> {
+  try {
+    const reconcile = httpsCallable<Record<string, never>, { synced: number; removed: number }>(
+      functions,
+      'reconcilePublicCatalog',
+      { timeout: 540000 }
+    );
+    const result = await reconcile({});
+    return result.data;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, 'catalogo_publico');
+  }
 }
 
 // Add a new product
@@ -196,6 +154,7 @@ export async function addProduct(
       precio: productInput.sellingPrice,
       sku: productInput.sku,
       notes: productInput.notes || '',
+      publicDescription: productInput.publicDescription?.trim() || '',
       createdAt: Date.now(),
       updatedAt: Date.now(),
       updatedBy: operatorEmail,
@@ -242,6 +201,9 @@ export async function updateProduct(
     if (updates.brand !== undefined) dataToUpdate.marca = updates.brand;
     if (updates.stock !== undefined) dataToUpdate.cantidad = updates.stock;
     if (updates.sellingPrice !== undefined) dataToUpdate.precio = updates.sellingPrice;
+    if (updates.publicDescription !== undefined) {
+      dataToUpdate.publicDescription = updates.publicDescription.trim();
+    }
 
     delete dataToUpdate.previousState;
     

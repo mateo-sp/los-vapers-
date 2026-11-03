@@ -24,6 +24,7 @@ import {
 
 import {
   subscribeToProducts,
+  reconcilePublicCatalog,
   addProduct,
   updateProduct,
   moveToTrashProduct,
@@ -104,6 +105,7 @@ function MainApp() {
   const [isSeeding, setIsSeeding] = useState(false);
   const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
   const hasAutoSeededRef = useRef(false);
+  const hasReconciledCatalogRef = useRef(false);
 
   const showToast = (type: 'success' | 'error' | 'info', text: string) => {
     setToastMessage({ type, text });
@@ -134,21 +136,27 @@ function MainApp() {
       setLogs([]);
       setVentas([]);
       setLoading(false);
+      hasReconciledCatalogRef.current = false;
       return;
     }
 
     setLoading(true);
+    if (!hasReconciledCatalogRef.current) {
+      hasReconciledCatalogRef.current = true;
+      void reconcilePublicCatalog()
+        .then(({ synced, removed }) => {
+          showToast('success', `Catálogo público actualizado: ${synced} productos sincronizados y ${removed} obsoletos eliminados.`);
+        })
+        .catch((error: unknown) => {
+          console.error('Error reparando el catálogo público:', error);
+          showToast('error', 'No se pudo reparar el catálogo público. Verifica que las funciones de Firebase estén desplegadas y vuelve a intentarlo.');
+        });
+    }
     
-    const unsubscribeProducts = subscribeToProducts(
-      (loadedProducts) => {
-        setProducts(loadedProducts);
-        setLoading(false);
-      },
-      (error) => showToast(
-        'error',
-        `No se pudo actualizar el catálogo público: ${error.message}`
-      )
-    );
+    const unsubscribeProducts = subscribeToProducts((loadedProducts) => {
+      setProducts(loadedProducts);
+      setLoading(false);
+    });
 
     const unsubscribeLogs = subscribeToActivityLogs((loadedLogs) => {
       setLogs(loadedLogs);
