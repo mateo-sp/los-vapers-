@@ -20,7 +20,8 @@ import {
   ShieldCheck,
   UserCheck,
   Layers,
-  Tag
+  Tag,
+  Globe
 } from 'lucide-react';
 
 import {
@@ -40,7 +41,8 @@ import {
   clearAllVentas,
   updateVenta,
   exportAllDataAsJson,
-  seedOfficialCatalog
+  seedOfficialCatalog,
+  syncAllProductsToPublicCatalog
 } from './services/dbService';
 import { Product, ProductInput, ActivityLog, Venta } from './types';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -105,8 +107,10 @@ function MainApp() {
 
   // Catalog initialization loading state & feedback
   const [isSeeding, setIsSeeding] = useState(false);
+  const [isSyncingPublic, setIsSyncingPublic] = useState(false);
   const [toastMessage, setToastMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
   const hasAutoSeededRef = useRef(false);
+  const hasAutoSyncedPublicRef = useRef(false);
 
   const showToast = (type: 'success' | 'error' | 'info', text: string) => {
     setToastMessage({ type, text });
@@ -126,6 +130,20 @@ function MainApp() {
       showToast('error', 'Error al cargar el catálogo oficial: ' + (err?.message || 'Verifica los permisos de conexión.'));
     } finally {
       setIsSeeding(false);
+    }
+  };
+
+  const handleSyncPublicCatalog = async () => {
+    if (isSyncingPublic) return;
+    try {
+      setIsSyncingPublic(true);
+      const res = await syncAllProductsToPublicCatalog(operatorEmail, operatorName);
+      showToast('success', `¡Catálogo público web sincronizado! ${res.synced} productos visibles para clientes.`);
+    } catch (err: any) {
+      console.error('Error sincronizando catálogo público:', err);
+      showToast('error', 'Error al sincronizar catálogo público: ' + (err?.message || 'Verifica la conexión.'));
+    } finally {
+      setIsSyncingPublic(false);
     }
   };
 
@@ -175,6 +193,16 @@ function MainApp() {
       handleSeedCatalog();
     }
   }, [loading, isAuthorizedAdmin, products.length, isSeeding]);
+
+  // Automatically guarantee that public catalog has all active products (including IGNITE V300 and others)
+  useEffect(() => {
+    if (!loading && isAuthorizedAdmin && products.length > 0 && !hasAutoSyncedPublicRef.current && !isSyncingPublic) {
+      hasAutoSyncedPublicRef.current = true;
+      syncAllProductsToPublicCatalog(operatorEmail, operatorName).catch((err) => {
+        console.warn('Auto sync warning:', err);
+      });
+    }
+  }, [loading, isAuthorizedAdmin, products.length, isSyncingPublic, operatorEmail, operatorName]);
 
   // Split active and trash products
   const activeProducts = useMemo(() => {
@@ -469,6 +497,19 @@ function MainApp() {
                   <span className="md:hidden">129 Vapes</span>
                 </button>
               )}
+
+              <button
+                type="button"
+                onClick={handleSyncPublicCatalog}
+                disabled={isSyncingPublic}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/35 border border-emerald-500/30 text-emerald-300 rounded-xl text-xs font-semibold transition-all cursor-pointer disabled:opacity-50"
+                title="Sincronizar todos los productos de inmediato con la base pública de la web"
+              >
+                <Globe className={`w-3.5 h-3.5 text-emerald-400 ${isSyncingPublic ? 'animate-spin' : ''}`} />
+                <span className="hidden sm:inline">
+                  {isSyncingPublic ? 'Sincronizando...' : 'Sincronizar Web'}
+                </span>
+              </button>
 
               <button
                 type="button"

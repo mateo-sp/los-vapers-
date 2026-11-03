@@ -83,12 +83,46 @@
         "voidBy": { "type": "string" }
       },
       "required": ["productId", "productName", "sellingPrice", "quantity", "paymentMethod", "timestamp"]
+    },
+    "publicProduct": {
+      "title": "PublicProduct",
+      "description": "Producto visible públicamente en el catálogo web para clientes",
+      "type": "object",
+      "properties": {
+        "nombre": { "type": "string" },
+        "name": { "type": "string" },
+        "marca": { "type": "string" },
+        "brand": { "type": "string" },
+        "categoria": { "type": "string" },
+        "category": { "type": "string" },
+        "precio": { "type": "number" },
+        "price": { "type": "number" },
+        "sellingPrice": { "type": "number" },
+        "stock": { "type": "integer" },
+        "cantidad": { "type": "integer" },
+        "disponible": { "type": "boolean" },
+        "inStock": { "type": "boolean" },
+        "sku": { "type": "string" },
+        "descripcion": { "type": "string" },
+        "description": { "type": "string" },
+        "imagenUrl": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "inventorySource": { "type": "boolean" },
+        "inventoryDeleted": { "type": "boolean" },
+        "isDeleted": { "type": "boolean" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["nombre", "marca", "precio", "disponible"]
     }
   },
   "firestore": {
     "/productos/{productId}": {
       "schema": "product",
       "description": "Colección de productos del catálogo de inventario"
+    },
+    "/catalogo_publico/{productId}": {
+      "schema": "publicProduct",
+      "description": "Catálogo público accesible para la página web de clientes"
     },
     "/activityLogs/{logId}": {
       "schema": "activityLog",

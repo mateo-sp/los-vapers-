@@ -74,44 +74,134 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   throw new Error(JSON.stringify(errInfo));
 }
 
-async function syncPublicCatalogProduct(productId: string, data: DocumentData) {
+export function buildPublicProductData(data: DocumentData | Partial<Product>): Record<string, unknown> {
+  const d = data as Record<string, any>;
+  const name = String(d.nombre !== undefined ? d.nombre : (d.name ?? '')).trim();
+  const brand = String(d.marca !== undefined ? d.marca : (d.brand ?? '')).trim();
+  const category = String(d.categoria !== undefined ? d.categoria : (d.category ?? 'Vapes')).trim();
+  const price = Number(d.precio !== undefined ? d.precio : (d.sellingPrice ?? 0));
+  const rawStock = Number(d.cantidad !== undefined ? d.cantidad : (d.stock ?? 0));
+  const isDeleted = d.isDeleted === true;
+  const isAvailable = rawStock > 0 && !isDeleted;
+
   const publicProduct: Record<string, unknown> = {
-    nombre: data.nombre ?? data.name ?? '',
-    marca: data.marca ?? data.brand ?? '',
-    categoria: data.category ?? data.categoria ?? 'Vapes',
-    precio: Number(data.precio ?? data.sellingPrice ?? 0),
-    disponible: Number(data.cantidad ?? data.stock ?? 0) > 0,
+    // Both Spanish and English field names for complete compatibility with any external app
+    nombre: name,
+    name: name,
+    marca: brand,
+    brand: brand,
+    categoria: category,
+    category: category,
+    precio: price,
+    price: price,
+    sellingPrice: price,
+    cantidad: rawStock,
+    stock: rawStock,
+    disponible: isAvailable,
+    inStock: isAvailable,
     inventorySource: true,
-    inventoryDeleted: data.isDeleted === true,
-    updatedAt: typeof data.updatedAt === 'number' ? data.updatedAt : Date.now(),
+    inventoryDeleted: isDeleted,
+    isDeleted: isDeleted,
+    updatedAt: typeof d.updatedAt === 'number' ? d.updatedAt : Date.now(),
   };
-  const description = data.notes ?? data.notas ?? data.description ?? data.descripcion;
-  if (typeof description === 'string' && description.trim()) {
-    publicProduct.descripcion = description;
-  }
-  const imageUrl = data.imagenUrl ?? data.imageUrl ?? data.image;
-  if (typeof imageUrl === 'string' && imageUrl.trim()) {
-    publicProduct.imagenUrl = imageUrl;
-  }
-  const variants = data.variantes ?? data.variants ?? data.flavors;
-  if (Array.isArray(variants)) {
-    publicProduct.variantes = variants.filter(
-      (variant): variant is string => typeof variant === 'string'
-    );
+
+  const sku = d.sku;
+  if (typeof sku === 'string' && sku.trim()) {
+    publicProduct.sku = sku.trim();
   }
 
-  await setDoc(
-    doc(db, PUBLIC_CATALOG_COLLECTION, productId),
-    publicProduct,
-    { merge: true }
-  );
+  const description = d.notes ?? d.notas ?? d.description ?? d.descripcion;
+  if (typeof description === 'string' && description.trim()) {
+    publicProduct.descripcion = description.trim();
+    publicProduct.description = description.trim();
+  }
+
+  const imageUrl = d.imagenUrl ?? d.imageUrl ?? d.image;
+  if (typeof imageUrl === 'string' && imageUrl.trim()) {
+    publicProduct.imagenUrl = imageUrl.trim();
+    publicProduct.imageUrl = imageUrl.trim();
+  }
+
+  const variants = d.variantes ?? d.variants ?? d.flavors;
+  if (Array.isArray(variants)) {
+    const cleanVariants = variants.filter(
+      (variant: unknown): variant is string => typeof variant === 'string' && variant.trim().length > 0
+    );
+    publicProduct.variantes = cleanVariants;
+    publicProduct.variants = cleanVariants;
+  }
+
+  return publicProduct;
 }
 
-async function removePublicCatalogProduct(productId: string) {
-  const publicProductRef = doc(db, PUBLIC_CATALOG_COLLECTION, productId);
-  const publicProduct = await getDoc(publicProductRef);
-  if (publicProduct.exists() && publicProduct.data().inventorySource === true) {
+export async function syncSinglePublicCatalogProduct(productId: string, data: DocumentData | Partial<Product>) {
+  try {
+    const publicData = buildPublicProductData(data);
+    await setDoc(doc(db, PUBLIC_CATALOG_COLLECTION, productId), publicData, { merge: true });
+  } catch (err) {
+    console.warn(`Alerta sincronizando producto ${productId} en catalogo_publico:`, err);
+  }
+}
+
+export async function removePublicCatalogProduct(productId: string) {
+  try {
+    const publicProductRef = doc(db, PUBLIC_CATALOG_COLLECTION, productId);
     await deleteDoc(publicProductRef);
+  } catch (err) {
+    console.warn(`Alerta eliminando producto ${productId} de catalogo_publico:`, err);
+  }
+}
+
+// Sincronización completa manual o automática de TODOS los productos hacia catalogo_publico
+export async function syncAllProductsToPublicCatalog(
+  operatorEmail: string = '',
+  operatorName: string = ''
+): Promise<{ total: number; synced: number; deleted: number }> {
+  try {
+    const querySnapshot = await getDocs(collection(db, PRODUCTS_COLLECTION));
+    const allProductsDocs = querySnapshot.docs;
+    const CHUNK_SIZE = 150;
+    let synced = 0;
+    let deleted = 0;
+
+    for (let i = 0; i < allProductsDocs.length; i += CHUNK_SIZE) {
+      const chunk = allProductsDocs.slice(i, i + CHUNK_SIZE);
+      const batch = writeBatch(db);
+
+      for (const productDoc of chunk) {
+        const data = productDoc.data();
+        const publicDocRef = doc(db, PUBLIC_CATALOG_COLLECTION, productDoc.id);
+
+        if (data.isDeleted) {
+          batch.delete(publicDocRef);
+          deleted++;
+        } else {
+          const publicPayload = buildPublicProductData(data);
+          batch.set(publicDocRef, publicPayload, { merge: true });
+          synced++;
+        }
+      }
+
+      await batch.commit();
+    }
+
+    await logActivity({
+      productId: 'full-catalog-sync',
+      productName: 'Catálogo Público Web',
+      type: 'adjustment',
+      quantity: synced,
+      prevStock: 0,
+      newStock: synced,
+      costPrice: 0,
+      sellingPrice: 0,
+      reason: `Sincronización masiva al catálogo público (${synced} activos, ${deleted} eliminados)`,
+      operatorEmail,
+      operatorName
+    });
+
+    return { total: allProductsDocs.length, synced, deleted };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, PUBLIC_CATALOG_COLLECTION);
   }
 }
 
@@ -126,17 +216,20 @@ export function subscribeToProducts(
   
   return onSnapshot(q, (snapshot) => {
     try {
-      const catalogSync = snapshot.docChanges().map((change) =>
-        change.type === 'removed'
-          ? removePublicCatalogProduct(change.doc.id)
-          : syncPublicCatalogProduct(change.doc.id, change.doc.data())
-      );
-      void Promise.all(catalogSync).catch((error: unknown) => {
-        const syncError = error instanceof Error
-          ? error
-          : new Error(String(error));
-        console.error('Error sincronizando el catálogo público:', syncError);
-        onCatalogSyncError?.(syncError);
+      // Background synchronization for live changes
+      const syncPromises = snapshot.docChanges().map(async (change) => {
+        try {
+          if (change.type === 'removed') {
+            await removePublicCatalogProduct(change.doc.id);
+          } else {
+            await syncSinglePublicCatalogProduct(change.doc.id, change.doc.data());
+          }
+        } catch (e) {
+          console.warn('Error en sincronización unitaria de catálogo:', e);
+        }
+      });
+      void Promise.all(syncPromises).catch((err) => {
+        onCatalogSyncError?.(err instanceof Error ? err : new Error(String(err)));
       });
 
       const products: Product[] = [];
@@ -202,6 +295,13 @@ export async function addProduct(
       isDeleted: false
     });
     
+    // Sincronizar directamente con el catálogo público
+    await syncSinglePublicCatalogProduct(docRef.id, {
+      ...productInput,
+      isDeleted: false,
+      updatedAt: Date.now()
+    });
+
     // Log activity
     await logActivity({
       productId: docRef.id,
@@ -247,6 +347,13 @@ export async function updateProduct(
     
     await updateDoc(docRef, dataToUpdate);
 
+    // Sincronizar directamente con el catálogo público
+    const combinedState = {
+      ...(updates.previousState || {}),
+      ...dataToUpdate
+    };
+    await syncSinglePublicCatalogProduct(id, combinedState);
+
     if (updates.previousState && updates.stock !== undefined && updates.stock !== updates.previousState.stock) {
       const diff = updates.stock - updates.previousState.stock;
       await logActivity({
@@ -285,6 +392,9 @@ export async function moveToTrashProduct(
       updatedBy: operatorEmail
     });
 
+    // Eliminar del catálogo público para que no aparezca a los clientes en la web
+    await removePublicCatalogProduct(id);
+
     await logActivity({
       productId: id,
       productName: name,
@@ -320,6 +430,11 @@ export async function restoreProductFromTrash(
       updatedBy: operatorEmail
     });
 
+    const restoredSnap = await getDoc(docRef);
+    if (restoredSnap.exists()) {
+      await syncSinglePublicCatalogProduct(id, restoredSnap.data());
+    }
+
     await logActivity({
       productId: id,
       productName: name,
@@ -347,6 +462,7 @@ export async function permanentDeleteProduct(
 ): Promise<void> {
   try {
     await deleteDoc(doc(db, PRODUCTS_COLLECTION, id));
+    await removePublicCatalogProduct(id);
     
     await logActivity({
       productId: id,
@@ -391,6 +507,14 @@ export async function adjustStockWithReason(
       cantidad: newStock,
       updatedAt: Date.now(),
       updatedBy: operatorEmail
+    });
+
+    // Sincronizar catálogo público de inmediato
+    await syncSinglePublicCatalogProduct(product.id, {
+      ...product,
+      stock: newStock,
+      cantidad: newStock,
+      updatedAt: Date.now()
     });
 
     await logActivity({
@@ -480,7 +604,7 @@ export async function executeSaleTransaction(input: SaleTransactionInput): Promi
 
       const newStock = currentStock - input.quantity;
 
-      // 1. Actualizar producto
+      // 1. Actualizar producto en el inventario
       transaction.update(productRef, {
         stock: newStock,
         cantidad: newStock,
@@ -488,7 +612,17 @@ export async function executeSaleTransaction(input: SaleTransactionInput): Promi
         updatedBy: input.operatorEmail
       });
 
-      // 2. Crear documento de Venta
+      // 2. Sincronizar catálogo público en la misma transacción atómica
+      const publicDocRef = doc(db, PUBLIC_CATALOG_COLLECTION, input.productId);
+      const publicPayload = buildPublicProductData({
+        ...pData,
+        stock: newStock,
+        cantidad: newStock,
+        updatedAt: Date.now()
+      });
+      transaction.set(publicDocRef, publicPayload, { merge: true });
+
+      // 3. Crear documento de Venta
       const debtAmountVal = input.debtAmount !== undefined 
         ? input.debtAmount 
         : (input.isPaid ? 0 : (input.sellingPrice * input.quantity));
@@ -521,7 +655,7 @@ export async function executeSaleTransaction(input: SaleTransactionInput): Promi
         montoDeuda: debtAmountVal
       });
 
-      // 3. Crear registro en bitácora
+      // 4. Crear registro en bitácora
       transaction.set(logRef, {
         productId: input.productId,
         productName: input.productName,
@@ -597,6 +731,15 @@ export async function voidSaleTransaction(
             updatedAt: Date.now(),
             updatedBy: operatorEmail
           });
+
+          // Sincronizar catálogo público
+          const publicDocRef = doc(db, PUBLIC_CATALOG_COLLECTION, productId);
+          transaction.set(publicDocRef, buildPublicProductData({
+            ...pData,
+            stock: newStock,
+            cantidad: newStock,
+            updatedAt: Date.now()
+          }), { merge: true });
         }
       }
 
@@ -857,6 +1000,7 @@ export async function emptyTrash(operatorEmail: string = '', operatorName: strin
     querySnapshot.forEach((docSnap) => {
       if (docSnap.data().isDeleted) {
         batch.delete(docSnap.ref);
+        batch.delete(doc(db, PUBLIC_CATALOG_COLLECTION, docSnap.id));
         count++;
       }
     });
@@ -1127,11 +1271,31 @@ export async function seedOfficialCatalog(
             updatedBy: operatorEmail || 'Sistema',
             isDeleted: false
           });
+
+          // Sincronizar catálogo público con datos completos
+          const publicDocRef = doc(db, PUBLIC_CATALOG_COLLECTION, existing.id);
+          batch.set(publicDocRef, buildPublicProductData({
+            name: item.name,
+            nombre: item.name,
+            brand: item.brand,
+            marca: item.brand,
+            category: 'Vapes',
+            categoria: 'Vapes',
+            stock: existing.stock,
+            cantidad: existing.stock,
+            sellingPrice: item.sellingPrice,
+            precio: item.sellingPrice,
+            sku: existing.sku || '',
+            notes: 'Catálogo oficial de vapes cargado',
+            isDeleted: false,
+            updatedAt: Date.now()
+          }), { merge: true });
+
           updated++;
         } else {
           const docRef = doc(collection(db, PRODUCTS_COLLECTION));
           const sku = item.brand.toUpperCase().replace(/[^A-Z0-9]/g, '').substring(0, 5) + '-' + Math.random().toString(36).substring(2, 7).toUpperCase();
-          batch.set(docRef, {
+          const docPayload = {
             name: item.name,
             nombre: item.name,
             brand: item.brand,
@@ -1149,7 +1313,13 @@ export async function seedOfficialCatalog(
             updatedAt: Date.now(),
             updatedBy: operatorEmail || 'Sistema',
             isDeleted: false
-          });
+          };
+          batch.set(docRef, docPayload);
+
+          // Sincronizar catálogo público con datos completos
+          const publicDocRef = doc(db, PUBLIC_CATALOG_COLLECTION, docRef.id);
+          batch.set(publicDocRef, buildPublicProductData(docPayload), { merge: true });
+
           created++;
         }
       }
@@ -1220,12 +1390,17 @@ export async function updatePricesByBrand(
           updatedBy: operatorEmail || 'Administrador'
         });
 
-        // 2. Sincronizar inmediatamente en la colección de 'catalogo_publico'
+        // 2. Sincronizar inmediatamente en la colección de 'catalogo_publico' con datos completos
         const publicDocRef = doc(db, PUBLIC_CATALOG_COLLECTION, item.id);
-        batch.set(publicDocRef, {
+        batch.set(publicDocRef, buildPublicProductData({
+          name: item.name,
+          nombre: item.name,
+          brand: item.brand,
+          marca: item.brand,
+          sellingPrice: item.newSellingPrice,
           precio: item.newSellingPrice,
           updatedAt: Date.now()
-        }, { merge: true });
+        }), { merge: true });
 
         updatedCount++;
       }
